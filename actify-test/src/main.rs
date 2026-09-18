@@ -518,7 +518,7 @@ impl UnqualifiedInstrumentActor {
 mod tests {
     use super::*;
     use actify::{Handle, VecHandle};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
     use std::time::Duration;
     use tokio::time::{Instant, sleep};
 
@@ -700,30 +700,26 @@ mod tests {
         assert_eq!(stored, "x-[1, 2]-3-true");
     }
 
-    /// A cache does not keep its actor alive: it only receives broadcasts, so
-    /// the actor still stops once the last handle goes out of scope.
+    /// An actor stops once the last handle to it goes out of scope, while one
+    /// whose handle was cloned out of that scope keeps running.
     #[tokio::test]
     async fn test_handle_out_of_scope() {
         let baseline = alive_tasks();
         let handle_1 = Handle::new(1);
 
-        let mut cache_3 = {
+        {
             let _handle_2 = Handle::new("test");
-            let handle_3 = Handle::new(1.); // This goes out of scope
+            let _handle_3 = Handle::new(1.); // These go out of scope
             let _handle_1_clone = handle_1.clone();
-            handle_3.cache().await // But the cache doesn't
-        };
+        }
 
-        // Only handle_1's actor survives the scope, even though cache_3 does
+        // Only handle_1's actor survives the scope
         let remaining = await_alive_tasks(baseline + 1).await;
         assert_eq!(
             remaining,
             baseline + 1,
             "expected only handle_1's actor to still be running"
         );
-
-        // Its broadcast channel is closed, so the cache can no longer receive
-        assert!(cache_3.try_recv_newest().is_err());
     }
 
     /// An actor runs one job at a time, so two actors calling each other each
@@ -888,39 +884,6 @@ mod tests {
         alive_tasks()
     }
 
-    #[derive(Debug, Clone)]
-    struct TestClient {
-        count: Arc<Mutex<i32>>,
-    }
-
-    impl TestClient {
-        fn new() -> Self {
-            TestClient {
-                count: Arc::new(Mutex::new(0)),
-            }
-        }
-
-        fn call(&self, _event: i32) {
-            let mut count = self.count.lock().unwrap();
-            *count += 1;
-        }
-
-        /// Waits until the callback has fired at least `expected` times.
-        ///
-        /// Polls rather than sleeping for a duration long enough to fit that
-        /// many intervals, which would be a bet on the machine keeping up.
-        async fn await_count(&self, expected: i32) -> i32 {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            loop {
-                let count = *self.count.lock().unwrap();
-                if count >= expected || Instant::now() >= deadline {
-                    return count;
-                }
-                sleep(Duration::from_millis(5)).await;
-            }
-        }
-    }
-
     #[tokio::test]
     async fn test_handle_task_cleanup() {
         let baseline = alive_tasks();
@@ -1037,35 +1000,6 @@ mod tests {
         assert_eq!(
             after_read_drop, baseline,
             "The actor should stop once the last ReadHandle is dropped"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_cache_does_not_spawn_tasks() {
-        let baseline = alive_tasks();
-
-        let handle = Handle::new(42);
-
-        let with_handle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
-
-        let _cache = handle.cache().await;
-
-        let with_cache = settled_alive_tasks().await;
-        assert_eq!(
-            with_cache,
-            baseline + 1,
-            "Cache should not spawn additional tasks"
-        );
-
-        let _cache2 = handle.cache().await;
-        let _cache3 = handle.cache_from_default();
-
-        let with_more_caches = settled_alive_tasks().await;
-        assert_eq!(
-            with_more_caches,
-            baseline + 1,
-            "Multiple caches should not spawn additional tasks"
         );
     }
 }

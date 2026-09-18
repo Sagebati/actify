@@ -227,36 +227,3 @@ async fn test_a_dropped_actor_reports_its_exit() {
     assert!(line.contains("DEBUG"), "wrong level on: {line}");
     assert!(line.contains("reason=Stopped"), "no reason on: {line}");
 }
-
-/// The lag report carries the actor type and the number of dropped values as
-/// fields, so a subscriber can tell which cache fell behind.
-#[tokio::test]
-async fn test_lag_reports_the_actor_type_and_count() {
-    let (_guard, output) = capture();
-
-    let handle = Handle::new(0);
-    let mut cache = handle.cache().await;
-    _ = cache.try_recv_newest(); // Consume first request
-
-    // More sets than the broadcast channel holds, so the cache must lag
-    for value in 0..150 {
-        handle.set(value).await;
-    }
-    _ = cache.try_recv_newest();
-
-    let output = output.contents();
-    let line = output
-        .lines()
-        .find(|line| line.contains("A cache receiver lagged"))
-        .expect("the lag is reported");
-    let actor_type = format!("actor_type=\"{}\"", std::any::type_name::<i32>());
-    assert!(line.contains(&actor_type), "no actor type on: {line}");
-    let messages: u64 = line
-        .split("messages=")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .expect("a count field")
-        .parse()
-        .expect("a numeric count");
-    assert!(messages > 0);
-}

@@ -32,7 +32,6 @@ By generating the boilerplate code for you, a few key benefits are provided:
 - Built-in methods like `get()`, `set()`, `set_if_changed()`, and `subscribe()` even without using the macro.
 - Automatic broadcasting to subscribers from methods taking `&mut self`, with `#[actify::broadcast]` and `#[actify::skip_broadcast]` overrides.
 - Methods that cannot be actified can stay in the impl block with `#[actify::skip]`.
-- Local synchronization through `Cache`, with `recv`, `recv_newest`, and non-blocking variants.
 - Generic type parameters supported in both actor types and method arguments.
 - Extension traits for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
 
@@ -68,7 +67,7 @@ async fn main() {
 
 ## Reactive Subscriptions
 
-Actors broadcast state changes automatically. Subscribers and caches let you react to updates without polling:
+Actors broadcast state changes automatically. Subscribers let you react to updates without polling:
 
 ```rust
 use actify::Handle;
@@ -80,16 +79,10 @@ async fn main() {
     // Subscribe to raw broadcast events
     let mut rx = handle.subscribe();
 
-    // Or create a local cache that stays in sync
-    let mut cache = handle.cache().await;
-
     handle.set(42).await;
 
     // The subscriber receives every change
     assert_eq!(rx.recv().await.unwrap(), 42);
-
-    // The cache provides synchronous access to the latest value
-    assert_eq!(cache.newest(), &42);
 }
 ```
 

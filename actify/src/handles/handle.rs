@@ -7,7 +7,6 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::read_handle::ReadHandle;
-use crate::Cache;
 use crate::actor::{Actor, ActorExit, ActorMethod, BroadcastFn, ExitState, Job, serve};
 
 pub(crate) const CHANNEL_SIZE: usize = 100;
@@ -88,8 +87,8 @@ where
 /// A clonable handle that can be used to remotely execute a closure on the corresponding [`Actor`].
 ///
 /// Handles are the primary way to interact with actors. Cloning a handle shares
-/// access to the same actor across tasks. For read-only access, see [`ReadHandle`]. For local
-/// synchronization, see [`Cache`].
+/// access to the same actor across tasks. For read-only access, see
+/// [`ReadHandle`].
 ///
 /// The second type parameter `V` is the view the handle exposes: what
 /// [`Handle::get`] returns and what the actor broadcasts. By default `V = T`,
@@ -185,54 +184,6 @@ where
         }
     }
 
-    /// Waits until the broadcast value satisfies `predicate` and returns it.
-    ///
-    /// Tests the actor's current value first, so a predicate that already holds
-    /// returns without waiting for an update. Every value broadcast after that
-    /// is tested in the order it was sent, except values lost while the receiver
-    /// was behind, which are logged.
-    ///
-    /// The predicate receives the broadcast type `V`, which the actor produces
-    /// without cloning itself, so this works on non-Clone actor types.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(0);
-    ///
-    /// let setter = handle.clone();
-    /// tokio::spawn(async move { setter.set(3).await });
-    ///
-    /// assert_eq!(handle.wait_until(|value| *value == 3).await, 3);
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn wait_until<P>(&self, predicate: P) -> V
-    where
-        P: FnMut(&V) -> bool,
-    {
-        let mut cache = self.cache().await;
-
-        tokio::select! {
-            // A handle owns a broadcast sender, so the cache's channel stays
-            // open even once the actor has panicked or its runtime has gone
-            // away. The exit signal is what reports those.
-            found = cache.wait_until(predicate) => match found {
-                Ok(value) => value.clone(),
-                Err(_) => self.report_actor_gone().await,
-            },
-            _ = self.wait_for_exit() => self.report_actor_gone().await,
-        }
-    }
-
     /// Returns the actor's current view, the type `V` it broadcasts.
     ///
     /// For a `Clone` actor type without a [`ToView`] implementation of its own,
@@ -260,24 +211,6 @@ where
     /// panics](crate#actor-lifetime-and-panics).
     pub async fn get(&self) -> V {
         self.run((), |s, _| s.inner.to_view()).await
-    }
-
-    /// Creates an initialized [`Cache`] that locally synchronizes with the remote actor.
-    /// As it is initialized with the current value, any updates before or during construction are included.
-    ///
-    /// See also [`Handle::cache_from_default`] for a cache that starts from `V::default()`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn cache(&self) -> Cache<V> {
-        // Subscribe before reading, so an update arriving in between is queued
-        // rather than lost.
-        let rx = self.subscribe();
-        let init = self.get().await;
-        Cache::new(rx, init)
     }
 }
 
@@ -623,45 +556,6 @@ where
     }
 }
 
-impl<T, V: Clone + Send + Sync + 'static> Handle<T, V> {
-    /// Creates a [`Cache`] initialized with the given value that locally synchronizes
-    /// with broadcasted updates from the actor.
-    /// As it is not initialized with the current value, any updates before construction are missed.
-    ///
-    /// See also [`Handle::cache`] for a cache initialized with the current actor value,
-    /// or [`Handle::cache_from_default`] to start from `V::default()`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(10);
-    /// let mut cache = handle.cache_from(42);
-    /// assert_eq!(cache.current(), &42);
-    ///
-    /// handle.set(99).await;
-    /// assert_eq!(cache.newest(), &99);
-    /// # }
-    /// ```
-    pub fn cache_from(&self, initial_value: V) -> Cache<V> {
-        Cache::new(self.subscribe(), initial_value)
-    }
-}
-
-impl<T, V: Default + Clone + Send + Sync + 'static> Handle<T, V> {
-    /// Creates a [`Cache`] initialized with `V::default()` that locally synchronizes
-    /// with broadcasted updates from the actor.
-    /// As it is not initialized with the current value, any updates before construction are missed.
-    ///
-    /// See also [`Handle::cache`] for a cache initialized with the current actor value,
-    /// or [`Handle::cache_from`] to start from a custom value.
-    pub fn cache_from_default(&self) -> Cache<V> {
-        self.cache_from(V::default())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,168 +678,6 @@ mod tests {
                 "expected a stopped-actor message, got: {message}"
             );
         });
-    }
-
-    mod waiting {
-        use super::*;
-        use tokio::time::{Duration, Instant, sleep, timeout};
-
-        const PERIOD: Duration = Duration::from_millis(100);
-
-        /// Fails rather than hanging when the wait never ends.
-        async fn finished<T>(wait: impl Future<Output = T>) -> T {
-            timeout(PERIOD * 10, wait)
-                .await
-                .expect("the wait never ended")
-        }
-
-        #[tokio::test(start_paused = true)]
-        async fn test_a_satisfied_predicate_returns_without_waiting() {
-            let handle = Handle::new(7);
-            let start = Instant::now();
-
-            assert_eq!(finished(handle.wait_until(|v| *v == 7)).await, 7);
-            assert_eq!(start.elapsed(), Duration::ZERO);
-        }
-
-        #[tokio::test(start_paused = true)]
-        async fn test_the_wait_ends_on_the_matching_update() {
-            let handle = Handle::new(0);
-            let setter = handle.clone();
-            tokio::spawn(async move {
-                sleep(PERIOD).await;
-                setter.set(9).await;
-            });
-
-            let start = Instant::now();
-
-            assert_eq!(finished(handle.wait_until(|v| *v == 9)).await, 9);
-            assert_eq!(start.elapsed(), PERIOD);
-        }
-
-        #[tokio::test(start_paused = true)]
-        async fn test_updates_that_do_not_match_are_skipped() {
-            let handle = Handle::new(0);
-            let setter = handle.clone();
-            tokio::spawn(async move {
-                for value in [1, 2, 3] {
-                    sleep(PERIOD).await;
-                    setter.set(value).await;
-                }
-            });
-
-            let start = Instant::now();
-
-            assert_eq!(finished(handle.wait_until(|v| *v == 3)).await, 3);
-            assert_eq!(start.elapsed(), PERIOD * 3);
-        }
-
-        #[tokio::test(start_paused = true)]
-        async fn test_an_update_during_construction_is_not_lost() {
-            let handle = Handle::new(1);
-            let setter = handle.clone();
-            // On the current-thread test runtime this task first runs when
-            // wait_until awaits the actor, so the update is broadcast exactly
-            // between its subscribe and its read.
-            let update = tokio::spawn(async move { setter.set(2).await });
-
-            assert_eq!(finished(handle.wait_until(|v| *v == 2)).await, 2);
-            update.await.unwrap();
-        }
-
-        /// The predicate runs on the broadcast type, so the actor type itself
-        /// never has to be cloned or even be `Clone`.
-        #[tokio::test(start_paused = true)]
-        async fn test_a_non_clone_actor_can_be_waited_on() {
-            let handle: Handle<NonCloneActor, i32> = Handle::new(NonCloneActor { value: 1 });
-            let setter = handle.clone();
-            tokio::spawn(async move { setter.set_value(2).await });
-
-            assert_eq!(finished(handle.wait_until(|value| *value == 2)).await, 2);
-        }
-
-        #[tokio::test(start_paused = true)]
-        async fn test_a_read_handle_can_wait() {
-            let handle = Handle::new(0);
-            let read_handle = handle.read_handle();
-            tokio::spawn(async move { handle.set(5).await });
-
-            assert_eq!(finished(read_handle.wait_until(|v| *v == 5)).await, 5);
-        }
-
-        /// A handle owns a broadcast sender, so the channel the wait is reading
-        /// never reports the actor gone. Only the exit signal does.
-        #[tokio::test(start_paused = true)]
-        async fn test_a_dead_actor_ends_the_wait_with_a_panic() {
-            let handle = Handle::new(PanicStruct {});
-            let waiter = handle.clone();
-            let wait = tokio::spawn(async move { waiter.wait_until(|_| false).await });
-
-            let _ = tokio::spawn(async move { handle.panic().await }).await;
-
-            let message = panic_message(finished(wait).await.unwrap_err());
-            assert!(
-                message.contains("A panic occurred in the Actor"),
-                "expected the actor's panic to be reported, got: {message}"
-            );
-        }
-    }
-
-    mod broadcast_derivation {
-        use super::*;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::{Arc, Mutex};
-
-        #[tokio::test]
-        async fn test_a_non_clone_actor_can_create_a_cache() {
-            let handle: Handle<NonCloneActor, i32> = Handle::new(NonCloneActor { value: 1 });
-
-            let cache = handle.cache().await;
-
-            assert_eq!(cache.current(), &1);
-        }
-
-        /// Counts every clone of the actor value.
-        #[derive(Debug)]
-        struct Counted {
-            clones: Arc<AtomicUsize>,
-            value: i32,
-        }
-
-        impl Clone for Counted {
-            fn clone(&self) -> Self {
-                self.clones.fetch_add(1, Ordering::SeqCst);
-                Counted {
-                    clones: self.clones.clone(),
-                    value: self.value,
-                }
-            }
-        }
-
-        impl ToView<i32> for Counted {
-            fn to_view(&self) -> i32 {
-                self.value
-            }
-        }
-
-        #[tokio::test]
-        async fn test_creating_a_cache_does_not_clone_the_actor_value() {
-            let clones = Arc::new(AtomicUsize::new(0));
-            let handle: Handle<Counted, i32> = Handle::new(Counted {
-                clones: clones.clone(),
-                value: 1,
-            });
-
-            let cache = handle.cache().await;
-
-            assert_eq!(cache.current(), &1);
-            assert_eq!(clones.load(Ordering::SeqCst), 0);
-
-            // Reading the actor value itself does clone it, which is what makes
-            // the zero above a count rather than a broken counter.
-            let _ = handle.with(|state| state.clone()).await;
-            assert_eq!(clones.load(Ordering::SeqCst), 1);
-        }
     }
 
     mod views {

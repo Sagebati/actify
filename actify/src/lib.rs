@@ -16,7 +16,6 @@
 //! * Typed arguments on the methods from your actor, exposed through the handle
 //! * No need to define message structs or enums!
 //! * Automatic [broadcasting] of state changes to subscribers
-//! * Local synchronization through [`Cache`]
 //! * Built-in [extension traits] for common standard library types
 //!
 //! [tokio]: https://docs.rs/tokio/latest/tokio/
@@ -202,7 +201,6 @@
 //! - [`Handle::with`]: runs a read-only closure on `&T`, the actor type rather than
 //!   its view (does not broadcast)
 //! - [`Handle::with_mut`]: runs a mutable closure on `&mut T` (broadcasts the change)
-//! - [`Handle::wait_until`]: waits until the broadcast value satisfies a predicate
 //!
 //! # Leaving methods off the handle
 //!
@@ -244,8 +242,7 @@
 //! # Broadcasting
 //!
 //! A method taking `&mut self` broadcasts the updated value to all subscribers
-//! after it returns. This keeps [`Cache`]s synchronized with
-//! the actor. A method taking `&self` does not broadcast.
+//! after it returns. A method taking `&self` does not broadcast.
 //!
 //! ```
 //! # use actify::{Handle, actify};
@@ -346,23 +343,11 @@
 //! The first block generates `CounterHandle`, the second generates `CounterGetters`.
 //! Both traits are automatically implemented for `Handle<Counter>`.
 //!
-//! # Cache
-//!
-//! A [`Cache`] provides local, synchronous access to the actor's value by subscribing
-//! to its broadcast stream. Create one with [`Handle::cache`] (initialized with the
-//! current value), [`Handle::cache_from`] (custom initial value),
-//! or [`Handle::cache_from_default`] (starts from `T::default()`).
-//!
-//! [`Cache::wait_until`] waits until the cached value satisfies a predicate,
-//! reading through the cache so it holds the value that matched.
-//!
-//! See [`CacheRecvError`] for the possible error conditions.
-//!
 //! # ReadHandle
 //!
 //! A [`ReadHandle`] is a read-only view of an actor. It supports [`get`](ReadHandle::get),
-//! [`subscribe`](ReadHandle::subscribe), [`wait_until`](ReadHandle::wait_until) and
-//! cache creation, but cannot mutate the actor. Obtain one via
+//! [`with`](ReadHandle::with) and [`subscribe`](ReadHandle::subscribe), but
+//! cannot mutate the actor. Obtain one via
 //! [`Handle::read_handle`].
 //!
 //! # Extension traits
@@ -437,8 +422,7 @@
 //! # Actor lifetime and panics
 //!
 //! An actor runs until every [`Handle`] to it is dropped. A [`ReadHandle`]
-//! holds a handle internally and keeps the actor alive. A [`Cache`] does not,
-//! since it only receives broadcasts.
+//! holds a handle internally and keeps the actor alive.
 //!
 //! A panicking method stops the actor permanently. There is no restart, and
 //! every later call on any handle to it panics, reporting that the actor
@@ -461,10 +445,8 @@
 //!
 //! Every actor exit is reported with the reason as a field: at ERROR when a
 //! method panicked, at DEBUG when the actor stopped because its handles were
-//! dropped or its runtime shut down. A [`Cache`] that falls
-//! behind is reported at DEBUG with the number of dropped values in a
-//! `messages` field, and each broadcast at TRACE with the method that caused
-//! it.
+//! dropped or its runtime shut down, and each broadcast at TRACE with the
+//! method that caused it.
 //!
 //! Nothing is emitted without a tracing subscriber. A dependent reading
 //! diagnostics through the `log` crate can enable the `log` feature instead.
@@ -498,7 +480,6 @@ mod readme {
 extern crate self as actify;
 
 mod actor;
-mod cache;
 mod extensions;
 mod handles;
 #[cfg(feature = "profiler")]
@@ -506,7 +487,6 @@ mod profiler;
 
 // Reexport for easier reference
 pub use actify_macros::{actify, broadcast, skip, skip_broadcast};
-pub use cache::{Cache, CacheRecvError};
 pub use extensions::{
     map::HashMapHandle, option::OptionHandle, set::HashSetHandle, string::StringHandle,
     vec::VecHandle, vecdeque::VecDequeHandle,

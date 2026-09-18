@@ -3,13 +3,11 @@ use std::fmt::{self, Debug};
 use tokio::sync::broadcast;
 
 use super::handle::{Handle, ToView};
-use crate::Cache;
 
 /// A clonable read-only handle that can only be used to read the internal value.
 ///
 /// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`],
-/// [`ReadHandle::with`], [`ReadHandle::subscribe`], [`ReadHandle::wait_until`],
-/// and [`ReadHandle::cache`].
+/// [`ReadHandle::with`] and [`ReadHandle::subscribe`].
 pub struct ReadHandle<T, V = T>(Handle<T, V>);
 
 impl<T, V> Clone for ReadHandle<T, V> {
@@ -104,39 +102,11 @@ impl<T: Send + Sync + 'static, V> ReadHandle<T, V> {
     }
 }
 
-impl<T, V: Clone + Send + Sync + 'static> ReadHandle<T, V> {
-    /// Creates a [`Cache`] initialized with the given value that locally synchronizes
-    /// with broadcasted updates from the actor.
-    pub fn cache_from(&self, initial_value: V) -> Cache<V> {
-        self.0.cache_from(initial_value)
-    }
-}
-
-impl<T, V: Default + Clone + Send + Sync + 'static> ReadHandle<T, V> {
-    /// Creates a [`Cache`] initialized with `V::default()` that locally synchronizes
-    /// with broadcasted updates from the actor.
-    pub fn cache_from_default(&self) -> Cache<V> {
-        self.0.cache_from_default()
-    }
-}
-
 impl<T, V> ReadHandle<T, V>
 where
     T: ToView<V> + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Creates an initialized [`Cache`] that locally synchronizes with the remote actor.
-    /// As it is initialized with the current value, any updates before construction are included.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn cache(&self) -> Cache<V> {
-        self.0.cache().await
-    }
-
     /// Returns the actor's current view. See [`Handle::get`].
     ///
     /// # Examples
@@ -159,22 +129,6 @@ where
     /// panics](crate#actor-lifetime-and-panics).
     pub async fn get(&self) -> V {
         self.0.get().await
-    }
-
-    /// Waits until the broadcast value satisfies `predicate` and returns it.
-    ///
-    /// See [`Handle::wait_until`] for which values are tested.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn wait_until<P>(&self, predicate: P) -> V
-    where
-        P: FnMut(&V) -> bool,
-    {
-        self.0.wait_until(predicate).await
     }
 }
 
