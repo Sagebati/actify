@@ -2,7 +2,9 @@
 
 Actify is a pre-1.0 crate used in production. The API may still change between minor versions.
 
-Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) built on [Tokio](https://tokio.rs) for any struct. Just add `#[actify]` to an `impl` block and call your methods through a clonable [`Handle`].
+Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) for any struct. Just add `#[actify]` to an `impl` block and call your methods through a clonable [`Handle`].
+
+Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies.
 
 [![Crates.io][crates-badge]][crates-url]
 [![License][mit-badge]][mit-url]
@@ -25,7 +27,8 @@ cargo add actify
 
 By generating the boilerplate code for you, a few key benefits are provided:
 
-- Async actor model built on Tokio and channels, which can keep arbitrary owned data types.
+- Async actor model that can keep arbitrary owned data types, on any executor.
+- The caller spawns the actor and supplies its channel, so neither is the crate's choice.
 - [Atomic](https://www.codingem.com/atomic-meaning-in-programming/) access and mutation of underlying data through clonable handles.
 - Typed arguments and return values on the methods from your actor, exposed through each handle.
 - No need to manually define message structs or enums!
@@ -53,8 +56,10 @@ impl Greeter {
 
 #[tokio::main]
 async fn main() {
-    // An actify handle is created and initialized with the Greeter struct
-    let handle = Handle::new(Greeter {});
+    // The handle is initialized with the Greeter struct, and `actor` is the
+    // future that serves it. Spawn it on whatever executor you use.
+    let (handle, actor) = Handle::builder(Greeter {}).build();
+    tokio::spawn(actor);
 
     // The say_hi method is made available on its handle through the actify! macro
     let greeting = handle.say_hi("Alfred".to_string()).await;
@@ -63,6 +68,33 @@ async fn main() {
     assert_eq!(greeting, "hi Alfred".to_string())
 }
 ```
+
+`Handle::new` is the same two lines, spawning on Tokio, behind the default
+`tokio` feature.
+
+## Bring your own channel
+
+The actor reads its calls from a channel the caller owns, so the queue's bound
+and the crate behind it are yours to pick. Anything that is a `Sink` and a
+`Stream` works, which covers `flume`, `futures-channel` and, through
+`tokio-util`, a Tokio `mpsc`:
+
+```rust,ignore
+let (tx, rx) = flume::unbounded();
+
+let (handle, actor) = Handle::builder(Greeter {})
+    .channel((tx.into_sink(), rx.into_stream()))
+    .build();
+
+tokio::spawn(actor);
+```
+
+Without a channel the default is an unbounded `futures-channel` queue, so
+queueing a call never waits and the only thing a call awaits is its reply. A
+bounded channel is how backpressure is asked for instead.
+
+See `examples/spawn_it_yourself.rs` for an actor served without Tokio anywhere
+in the graph.
 
 For full API documentation, see [docs.rs](https://docs.rs/actify/latest/actify/).
 
