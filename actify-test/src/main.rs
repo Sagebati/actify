@@ -779,11 +779,6 @@ mod tests {
 
         actor_handle.baz(0).await;
         assert!(rx.try_recv().is_err()); // Nothing
-
-        assert_eq!(
-            actor_handle.take_broadcast_counts().await,
-            HashMap::from([("foo", 2), ("set", 1)])
-        );
     }
 
     #[tokio::test]

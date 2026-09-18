@@ -163,31 +163,6 @@ async fn test_the_exit_event_names_the_actor_instance() {
     assert_eq!(parse_actor_id(event_fields), parse_actor_id(line));
 }
 
-/// The span's actor_id is the profiler's spawn-order id, so a snapshot
-/// entry can be matched to that actor's log lines.
-#[tokio::test]
-async fn test_the_span_id_matches_the_profiler_snapshot() {
-    let (_guard, output) = capture();
-
-    #[derive(Clone, Debug)]
-    struct CorrelationProbe; // Unique, so the snapshot filter finds only this actor
-
-    let handle = Handle::new(CorrelationProbe);
-    handle.with(|_| tracing::info!("correlation probe")).await;
-
-    let snapshot_id = actify::broadcast_counts()
-        .into_iter()
-        .find(|actor| actor.actor_type.contains("CorrelationProbe"))
-        .expect("the probe is in the snapshot")
-        .id;
-
-    let output = output.contents();
-    assert_eq!(
-        parse_actor_id(find_line(&output, "correlation probe")),
-        snapshot_id
-    );
-}
-
 /// A panicking method is the exit a subscriber must not miss: the std panic
 /// hook prints to stderr, which never reaches a structured log pipeline.
 #[tokio::test]

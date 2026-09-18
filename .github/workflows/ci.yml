@@ -63,9 +63,8 @@ jobs:
           # CI, their guard fails when the variable is left unset.
           TRYBUILD_TESTS: "0"
 
-  # Workspace feature unification means `cargo test --workspace` always builds
-  # actify with the profiler feature enabled (actify-test requires it). This job
-  # is the only place the default (no-feature) build of actify is compiled.
+  # Dev-dependencies and the workspace build hand actify a bigger tokio than its
+  # manifest declares, so the declared features are only proven here.
   test-features:
     runs-on: ubuntu-latest
     steps:
@@ -80,8 +79,6 @@ jobs:
         run: cargo check -p actify
       - name: Test default features
         run: cargo test -p actify
-      - name: Test profiler feature
-        run: cargo test -p actify --features profiler
 
   docs:
     runs-on: ubuntu-latest

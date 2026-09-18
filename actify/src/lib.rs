@@ -458,15 +458,6 @@
 //!   reach those records, which is why the events name the actor type and id
 //!   themselves. Cargo features unify across a build, so enabling it switches
 //!   every tracing-using crate in the binary the same way.
-//! - `profiler`: counts broadcasts per method on each actor, readable through
-//!   `Handle::broadcast_counts` and drained per phase through
-//!   `Handle::take_broadcast_counts`. The free function `broadcast_counts`
-//!   snapshots every live actor in the process, one entry per actor with its
-//!   type, the call site it was spawned from and the id its span carries as
-//!   `actor_id`, and `cumulative_broadcast_counts`
-//!   totals every broadcast ever made per spawn site, including taken counts
-//!   and those of stopped actors. A development aid: its API is exempt from
-//!   semver and may change or be removed in any release.
 
 /// The README examples, compiled and run as part of the test suite.
 ///
@@ -482,8 +473,6 @@ extern crate self as actify;
 mod actor;
 mod extensions;
 mod handles;
-#[cfg(feature = "profiler")]
-mod profiler;
 
 // Reexport for easier reference
 pub use actify_macros::{actify, broadcast, skip, skip_broadcast};
@@ -492,9 +481,6 @@ pub use extensions::{
     vec::VecHandle, vecdeque::VecDequeHandle,
 };
 pub use handles::{Handle, ReadHandle, ToView};
-
-#[cfg(feature = "profiler")]
-pub use profiler::{ActorCounts, CumulativeCounts, broadcast_counts, cumulative_broadcast_counts};
 
 /// The crate's own items that the [`actify`](macro@crate::actify) macro needs in
 /// generated code. Standard library types are named by absolute path instead.

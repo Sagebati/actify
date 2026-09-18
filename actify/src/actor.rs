@@ -11,15 +11,8 @@ pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(feature = "profiler")]
-use crate::profiler::BroadcastCounts;
-#[cfg(feature = "profiler")]
-use std::collections::HashMap;
-#[cfg(feature = "profiler")]
-use std::sync::Arc;
-
-/// Names actor instances in spawn order, process-wide. The span's `actor_id`
-/// and the profiler's id are this same numbering.
+/// Names actor instances in spawn order, process-wide, which is what the
+/// span's `actor_id` carries.
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) type BroadcastFn<T> = Box<dyn Fn(&T, &'static str) + Send + Sync>;
@@ -34,8 +27,6 @@ pub struct Actor<T> {
     broadcast_fn: BroadcastFn<T>,
     id: u64,
     spawned_at: &'static Location<'static>,
-    #[cfg(feature = "profiler")]
-    broadcast_counts: Arc<BroadcastCounts>,
 }
 
 impl<T: Debug> Debug for Actor<T> {
@@ -45,9 +36,8 @@ impl<T: Debug> Debug for Actor<T> {
 }
 
 impl<T> Actor<T> {
-    /// The id and the spawn site name the instance: both go on the actor
-    /// span, and the profiler reuses them so a snapshot entry matches the
-    /// span's log lines.
+    /// The id and the spawn site name the instance, and both go on the actor
+    /// span.
     pub(crate) fn new(
         broadcast_fn: BroadcastFn<T>,
         inner: T,
@@ -59,32 +49,11 @@ impl<T> Actor<T> {
             broadcast_fn,
             id,
             spawned_at,
-            #[cfg(feature = "profiler")]
-            broadcast_counts: crate::profiler::new_counters(id, type_name::<T>(), spawned_at),
         }
     }
 
     pub fn broadcast(&mut self, method: &'static str) {
-        #[cfg(feature = "profiler")]
-        self.broadcast_counts.record(method);
-
         (self.broadcast_fn)(&self.inner, method);
-    }
-}
-
-/// The actor's own side of the profiler: its counters. The registry, the
-/// process-wide snapshot and the cumulative totals live in `crate::profiler`.
-#[cfg(feature = "profiler")]
-impl<T> Actor<T> {
-    /// The broadcasts per method since the actor started or since the last
-    /// take.
-    pub(crate) fn broadcast_counts(&self) -> HashMap<&'static str, usize> {
-        self.broadcast_counts.snapshot()
-    }
-
-    /// Returns the broadcast counts and resets them.
-    pub(crate) fn take_broadcast_counts(&mut self) -> HashMap<&'static str, usize> {
-        self.broadcast_counts.take()
     }
 }
 
