@@ -27,20 +27,53 @@ pub fn view_param() -> Ident {
     Ident::new("__ActifyV", Span::call_site())
 }
 
-/// Whether a method can travel as a variant rather than as a closure.
+/// How a variant reaches the method it stands for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Carrier {
+    /// The variant's arm names the method directly.
+    Direct,
+    /// The variant carries a function pointer to it.
+    ///
+    /// A method's own `where` clause is in scope where the call is made and
+    /// not inside the single `dispatch` that runs every variant, which is
+    /// bound by the impl block alone. A non-capturing closure written at the
+    /// call site coerces to the pointer, which costs a word in the message
+    /// and an inlinable indirect call.
+    Thunk,
+}
+
+/// How a method's call travels, or `None` if it cannot travel at all.
 ///
 /// A method with generics of its own cannot: its arguments would have to live
-/// in a variant of an enum that has no such parameter. Neither can one whose
-/// own `where` clause adds a bound, because the single `dispatch` that runs
-/// every variant is bound by the impl block alone, and that bound is not in
-/// scope inside it.
+/// in a variant of an enum that has no such parameter.
+pub fn carrier(method: &MethodInfo) -> Option<Carrier> {
+    if !method.method_generics.params.is_empty() {
+        return None;
+    }
+    let bounded = method
+        .method_generics
+        .where_clause
+        .as_ref()
+        .is_some_and(|clause| !clause.predicates.is_empty());
+    match (bounded, method.is_async) {
+        (false, _) => Some(Carrier::Direct),
+        // A thunk to an async method would have to return a boxed future.
+        (true, true) => None,
+        (true, false) => Some(Carrier::Thunk),
+    }
+}
+
+/// Whether a method can travel as a variant rather than as a closure.
 pub fn is_message(method: &MethodInfo) -> bool {
-    method.method_generics.params.is_empty()
-        && method
-            .method_generics
-            .where_clause
-            .as_ref()
-            .is_none_or(|clause| clause.predicates.is_empty())
+    carrier(method).is_some()
+}
+
+/// The function-pointer field a thunked variant carries.
+pub fn thunk_type(method: &MethodInfo, impl_type: &syn::Type) -> TokenStream {
+    let arg_types: Vec<_> = method.arg_types.iter().collect();
+    let output = &method.output_type;
+    let mutability = method.is_mutable.then(|| quote! { mut });
+    quote! { fn(&#mutability #impl_type #(, #arg_types)*) -> #output }
 }
 
 /// The variant a method's call travels as, e.g. `say_hi` becomes `SayHi`.
@@ -155,11 +188,16 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         let output = &method.output_type;
         let doc = format!("The `{}` call.", method.ident);
         let attrs = cfg_attrs(method);
+        let thunk = (carrier(method) == Some(Carrier::Thunk)).then(|| {
+            let ty = thunk_type(method, impl_type);
+            quote! { __actify_thunk: #ty, }
+        });
         quote! {
             #[doc = #doc]
             #(#attrs)*
             #variant {
                 #(#arg_names: #arg_types,)*
+                #thunk
                 __actify_reply: ::actify::__private::Reply<#output>,
             },
         }
@@ -174,11 +212,17 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         let mutability = method.is_mutable.then(|| quote! { mut });
         let awaiter = method.is_async.then(|| quote! { .await });
         let attrs = cfg_attrs(method);
+        let thunked = carrier(method) == Some(Carrier::Thunk);
+        let binding = thunked.then(|| quote! { __actify_thunk, });
+        let invocation = if thunked {
+            quote! { __actify_thunk(&#mutability __actify_actor.inner #(, #arg_names)*) }
+        } else {
+            quote! { #prefix::#ident(&#mutability __actify_actor.inner #(, #arg_names)*)#awaiter }
+        };
         quote! {
             #(#attrs)*
-            #call::#variant { #(#arg_names,)* __actify_reply } => {
-                let __actify_result: #output =
-                    #prefix::#ident(&#mutability __actify_actor.inner #(, #arg_names)*)#awaiter;
+            #call::#variant { #(#arg_names,)* #binding __actify_reply } => {
+                let __actify_result: #output = #invocation;
                 __actify_actor.respond(__actify_reply, __actify_result);
             }
         }

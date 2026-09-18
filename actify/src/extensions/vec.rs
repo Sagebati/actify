@@ -1,5 +1,5 @@
 use actify_macros::actify;
-use core::ops::RangeBounds;
+use core::ops::{Bound, RangeBounds};
 
 /// An extension trait for `Vec<T>` actors, made available on the [`Handle`](crate::Handle)
 /// as [`VecHandle`](crate::VecHandle).
@@ -8,9 +8,10 @@ trait ActorVec<T> {
 
     fn is_empty(&self) -> bool;
 
-    fn drain<R>(&mut self, range: R) -> Vec<T>
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static;
+    /// Takes the range as a pair of bounds, which is what a call can carry.
+    /// The handle's own `drain` takes any range and lowers it to this.
+    #[doc(hidden)]
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T>;
 
     fn len(&self) -> usize;
 
@@ -114,10 +115,7 @@ where
     /// assert_eq!(handle.get().await, Vec::<i32>::new());
     /// # }
     /// ```
-    fn drain<R>(&mut self, range: R) -> Vec<T>
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static,
-    {
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T> {
         self.drain(range).collect()
     }
 
@@ -459,6 +457,41 @@ where
     /// ```
     fn resize(&mut self, new_len: usize, value: T) {
         self.resize(new_len, value)
+    }
+}
+
+/// The range methods, written by hand so that a caller can still pass any
+/// range while the call itself carries a concrete pair of bounds.
+impl<T, V, S> VecHandle<T, V, S>
+where
+    T: Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: actify::JobSender<VecCall<T, V>>,
+    Vec<T>: actify::ToView<V> + Send + Sync + 'static,
+{
+    /// Removes the range from the vector and returns what it held.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// assert_eq!(handle.drain(1..).await, vec![2, 3]);
+    /// assert_eq!(handle.get().await, vec![1]);
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the actor has stopped.
+    pub async fn drain<R>(&self, range: R) -> Vec<T>
+    where
+        R: RangeBounds<usize>,
+    {
+        self.drain_bounds((range.start_bound().cloned(), range.end_bound().cloned()))
+            .await
     }
 }
 

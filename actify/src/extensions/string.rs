@@ -1,5 +1,5 @@
 use actify_macros::actify;
-use core::ops::RangeBounds;
+use core::ops::{Bound, RangeBounds};
 
 /// An extension trait for `String` actors, made available on the [`Handle`](crate::Handle)
 /// as [`StringHandle`](crate::StringHandle).
@@ -40,15 +40,18 @@ trait ActorString {
 
     fn insert_str(&mut self, idx: usize, string: String);
 
-    fn drain<R>(&mut self, range: R) -> String
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static;
+    /// Takes the range as a pair of bounds, which is what a call can carry.
+    /// The handle's own `drain` takes any range and lowers it to this.
+    #[doc(hidden)]
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> String;
 
     fn split_off(&mut self, at: usize) -> String;
 
-    fn replace_range<R>(&mut self, range: R, replace_with: String)
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static;
+    /// Takes the range as a pair of bounds, as [`drain_bounds`] does.
+    ///
+    /// [`drain_bounds`]: ActorString::drain_bounds
+    #[doc(hidden)]
+    fn replace_range_bounds(&mut self, range: (Bound<usize>, Bound<usize>), replace_with: String);
 }
 
 /// Methods on [`StringHandle`](crate::StringHandle), for an actor holding a `String>`, exposed as [`StringHandle`](crate::StringHandle).
@@ -393,10 +396,7 @@ impl ActorString for String {
     /// assert_eq!(handle.get().await, "world");
     /// # }
     /// ```
-    fn drain<R>(&mut self, range: R) -> String
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static,
-    {
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> String {
         self.drain(range).collect()
     }
 
@@ -442,11 +442,70 @@ impl ActorString for String {
     /// assert_eq!(handle.get().await, "goodbye world");
     /// # }
     /// ```
-    fn replace_range<R>(&mut self, range: R, replace_with: String)
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static,
-    {
+    fn replace_range_bounds(&mut self, range: (Bound<usize>, Bound<usize>), replace_with: String) {
         self.replace_range(range, &replace_with)
+    }
+}
+
+/// The range methods, written by hand so that a caller can still pass any
+/// range while the call itself carries a concrete pair of bounds.
+impl<V, S> StringHandle<V, S>
+where
+    V: Clone + Send + Sync + 'static,
+    S: actify::JobSender<StringCall<V>>,
+    String: actify::ToView<V>,
+{
+    /// Removes the range from the string and returns what it held.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::StringHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let handle = StringHandle::new("hello world".to_string());
+    /// assert_eq!(handle.drain(..6).await, "hello ");
+    /// assert_eq!(handle.get().await, "world");
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the actor has stopped.
+    pub async fn drain<R>(&self, range: R) -> String
+    where
+        R: RangeBounds<usize>,
+    {
+        self.drain_bounds((range.start_bound().cloned(), range.end_bound().cloned()))
+            .await
+    }
+
+    /// Replaces the range with `replace_with`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::StringHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let handle = StringHandle::new("hello world".to_string());
+    /// handle.replace_range(0..5, "goodbye".to_string()).await;
+    /// assert_eq!(handle.get().await, "goodbye world");
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the actor has stopped.
+    pub async fn replace_range<R>(&self, range: R, replace_with: String)
+    where
+        R: RangeBounds<usize>,
+    {
+        self.replace_range_bounds(
+            (range.start_bound().cloned(), range.end_bound().cloned()),
+            replace_with,
+        )
+        .await
     }
 }
 

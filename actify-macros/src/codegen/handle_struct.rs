@@ -9,7 +9,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Ident;
 
-use super::call::{call_type, declared_params, is_message, param_names, variant_ident};
+use super::call::{Carrier, call_type, carrier, declared_params, param_names, variant_ident};
 
 /// The view parameter the generated handle declares.
 fn view() -> Ident {
@@ -200,7 +200,7 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
     let output = &method.output_type;
     let return_type = super::handle::quote_return_type(output);
 
-    if !is_message(method) {
+    if carrier(method).is_none() {
         let prefix = super::handle::build_call_prefix(info);
         let impl_type = &info.impl_type;
         let mutability = method.is_mutable.then(|| quote! { mut });
@@ -234,12 +234,28 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
     let variant = variant_ident(method);
     let call = &info.call_enum_ident;
 
+    // A method's own `where` clause is in scope here and not inside the
+    // actor's `dispatch`, so the call carries a pointer to the method rather
+    // than having `dispatch` name it. The closure captures nothing, which is
+    // what lets it coerce to a plain function pointer.
+    let thunk = (carrier(method) == Some(Carrier::Thunk)).then(|| {
+        let prefix = super::handle::build_call_prefix(info);
+        quote! {
+            __actify_thunk: |__actify_inner #(, #arg_names)*| {
+                #prefix::#ident(__actify_inner #(, #arg_names)*)
+            },
+        }
+    });
+
     quote! {
         #(#attrs)*
-        pub async fn #ident(&self, #(#arg_names: #arg_types),*) #return_type {
+        pub async fn #ident #method_generics(&self, #(#arg_names: #arg_types),*) #return_type
+        #where_clause
+        {
             let (__actify_reply, __actify_rx) = ::actify::__private::reply();
             let __actify_call: #call_ty = #call::#variant {
                 #(#arg_names,)*
+                #thunk
                 __actify_reply,
             };
             self.0.__call(__actify_call, __actify_rx).await
