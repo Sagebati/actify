@@ -9,7 +9,7 @@ mod parse;
 
 use proc_macro::TokenStream;
 
-/// Leaves one method off the generated handle trait.
+/// Leaves one method off the generated handle.
 ///
 /// ```ignore
 /// #[actify]
@@ -75,9 +75,13 @@ fn report(error: syn::Error, impl_block: &syn::ItemImpl) -> TokenStream {
     .into()
 }
 
-/// Expands an impl block so its methods can be called remotely through a handle.
-/// The generated handle trait keeps the method signatures, so arguments and
-/// return values stay typed.
+/// Expands an impl block so its methods can be called remotely through a
+/// handle.
+///
+/// Generates a message enum with one variant per method, a handle whose
+/// methods mirror the block's and send those variants, and a builder for it.
+/// Arguments and return values keep their types the whole way, so a call is
+/// checked as if it were a direct one.
 #[proc_macro_attribute]
 pub fn actify(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = syn::parse_macro_input!(item as syn::ItemImpl);

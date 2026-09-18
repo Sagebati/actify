@@ -17,7 +17,7 @@ fn accumulate(errors: &mut Option<Error>, error: Error) {
 pub struct ImplInfo {
     /// The full impl type, e.g. `TestStruct<T>`.
     pub impl_type: Box<Type>,
-    /// Generated handle trait name, e.g. `TestStructHandle`.
+    /// Generated handle name, e.g. `TestStructHandle`.
     pub handle_trait_ident: Ident,
     /// Generated message enum name, e.g. `TestStructCall`.
     pub call_enum_ident: Ident,
@@ -210,8 +210,8 @@ fn get_impl_type_ident(impl_type: &Type) -> syn::Result<Ident> {
         })
 }
 
-/// Built-in compiler attributes that are safe to propagate onto generated trait
-/// signatures and handle impl methods. Everything else (proc-macro attributes
+/// Built-in compiler attributes that are safe to propagate onto the generated
+/// handle's methods and its message enum's variants. Everything else (proc-macro attributes
 /// like `#[instrument]`, actify-specific attributes like `#[skip]`)
 /// is stripped so it only appears on the original impl method where it belongs.
 const PROPAGATED_ATTRIBUTES: &[&str] = &[
@@ -343,8 +343,9 @@ fn validate_method_generics(method: &ImplItemFn) -> syn::Result<()> {
 
 /// Validate that a return type can travel back from the actor task.
 ///
-/// Results are boxed as `Box<dyn Any + Send>`, which requires an owned
-/// `'static` type, and the generated code names the type in a `let` binding.
+/// A result travels home through a reply channel the call carries, so it has
+/// to be an owned `'static` type, and the generated code names it in a `let`
+/// binding.
 ///
 /// Unlike arguments this rejects a known set rather than accepting one: return
 /// types are more varied, and an allowlist risks refusing something that

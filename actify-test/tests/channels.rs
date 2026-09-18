@@ -41,7 +41,6 @@ async fn stops(actor: impl Future<Output = ()>) {
 async fn test_the_default_channel_serves_an_actor() {
     let (handle, actor) = GreeterHandle::builder(greeter()).build();
     let task = tokio::spawn(actor);
-    let handle = GreeterHandle::from_handle(handle);
 
     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
     handle.shout().await;
@@ -58,7 +57,6 @@ async fn test_flume_serves_an_actor() {
         .channel((tx.into_sink(), rx.into_stream()))
         .build();
     let task = tokio::spawn(actor);
-    let handle = GreeterHandle::from_handle(handle);
 
     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
     handle.shout().await;
@@ -78,7 +76,6 @@ async fn test_a_tokio_mpsc_serves_an_actor() {
         ))
         .build();
     let task = tokio::spawn(actor);
-    let handle = GreeterHandle::from_handle(handle);
 
     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
 
@@ -91,7 +88,6 @@ async fn test_a_tokio_mpsc_serves_an_actor() {
 #[test]
 fn test_an_actor_is_served_wherever_the_caller_spawns_it() {
     let (handle, actor) = GreeterHandle::builder(greeter()).build();
-    let handle = GreeterHandle::from_handle(handle);
 
     let served = std::thread::spawn(move || futures_executor::block_on(actor));
 

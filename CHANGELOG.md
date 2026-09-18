@@ -11,9 +11,61 @@ they record what changed rather than why, and are not exhaustive. 0.8.0 through
 
 This release makes actify runtime-agnostic, and pays for it by removing
 everything that could only be built on one runtime's channels and timers. It
-is breaking throughout.
+also stops sending closures to actors: a call now travels as data, which is
+what makes the channel agnostic in more than name. It is breaking throughout.
 
 ### Changed
+
+- A call travels to its actor as data, not as a boxed closure.
+
+  `#[actify]` generates a message enum beside each handle, with one variant
+  per method holding that call's arguments and the caller's reply channel.
+  Nothing on the way to the actor is boxed and nothing is downcast, so the two
+  downcast panics are gone. Measured with a counting allocator, a call went
+  from five allocations to two: the reply channel, and the queue slot carrying
+  the message.
+
+  This is what a runtime-agnostic channel was missing. The halves could come
+  from anywhere already, but the item they carried was a closure, which only
+  an in-process queue can hold.
+
+
+- `#[actify]` generates a handle struct rather than a trait.
+
+  `GreeterHandle` is now a type, with `new`, `builder`, `get`, `set`,
+  `read_handle` and one method per actified method. Its message type is that
+  actor's enum, which is what lets a call be data at all.
+
+  `Handle::new(Greeter {})` still builds an actor, but the handle it returns
+  carries only the built-in calls. Write `GreeterHandle::new(Greeter {})` for
+  one that carries the methods too.
+
+  A handle can no longer be mocked behind the generated trait, since there is
+  no trait. A caller wanting to stand in for an actor defines its own trait
+  and implements it for the generated handle.
+
+
+- Every method of an actor has to live in one `#[actify]` block.
+
+  A block generates a handle and a message type, and an actor owns one state
+  served through one channel. A second block generates the same two names,
+  which the compiler reports as items defined twice. `#[actify(name = "...")]`
+  is gone with the reason for it. Blocks that a `#[cfg]` makes mutually
+  exclusive still work, because only one of them ever exists.
+
+
+- A method cannot declare generic parameters of its own.
+
+  Its arguments would have to live in a variant of an enum that has no such
+  parameter. A concrete function pointer says the same thing for most callers,
+  and a non-capturing closure coerces to one, so `handle.apply(5, |x| x * 2)`
+  still compiles against `fn apply(&self, value: usize, f: fn(usize) -> usize)`.
+
+  A method's own `where` clause is still allowed, except on an async method.
+  The call carries a pointer to the method so that the bound is proved where
+  the call is made, and a pointer to an async method returns a future the
+  message cannot hold.
+
 
 - An actor is a future the caller spawns, rather than a task actify spawns.
 
@@ -95,6 +147,20 @@ each is tracked for a runtime-agnostic replacement.
 
 - `Handle::remaining_capacity`. It was `tokio::sync::mpsc::Sender::capacity`,
   and a channel in general has no such thing.
+
+- `Handle::with`, `Handle::with_mut` and `ReadHandle::with`, and the fifteen
+  extension methods that took a closure: `retain` and `retain_mut` across
+  `Vec`, `VecDeque`, `HashMap`, `HashSet` and `String`; `sort_by` on `Vec`;
+  `map`, `filter`, `take_if`, `unwrap_or_else` and `get_or_insert_with` on
+  `Option`; and `modify` and `get_or_insert_with` on `HashMap`.
+
+  A closure is not data, so none of them can be a call. Reading part of an
+  actor without cloning all of it, or changing it in place, is what an
+  `#[actify]` method is for, and one is as atomic as `with_mut` was.
+
+- The public `Job<T>` struct. `Job` is now an alias for the calls every handle
+  has, and an actor with an `#[actify]` block names its own message type to
+  give a channel its item type.
 
 ### Fixed
 

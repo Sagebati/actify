@@ -4,21 +4,21 @@
 //!
 //! Actify is a pre-1.0 crate used in production. The API may still change between minor versions.
 //!
-//! Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels,
-//! and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async
-//! actor model built on [Tokio][tokio] for any struct. Just add `#[actify]` to an `impl` block and call your methods
-//! through a clonable [`Handle`].
+//! Sharing (mutable) state across async tasks in Rust usually means juggling
+//! mutexes and channels, and a lot of boilerplate like hand-written message
+//! enums. Actify writes that for you: add `#[actify]` to an `impl` block and
+//! call your methods through a clonable handle of the actor's own.
 //!
 //! By generating the boilerplate code for you, a few key benefits are provided:
 //!
-//! * Async actor model built on Tokio and channels
-//! * Access to actors through clonable [`Handle`]s
+//! * Async actor model over any channel, on any executor
+//! * Access to actors through clonable, generated handles
 //! * Typed arguments on the methods from your actor, exposed through the handle
-//! * No need to define message structs or enums!
-//! * Built-in [extension traits] for common standard library types
+//! * No need to define message enums: the macro writes one, and a call travels
+//!   as a variant of it rather than as a boxed closure
+//! * Built-in [handles] for common standard library types
 //!
-//! [tokio]: https://docs.rs/tokio/latest/tokio/
-//! [extension traits]: #extension-traits
+//! [handles]: #handles-for-standard-library-types
 //!
 //! # Main functionality of actify!
 //!
@@ -253,7 +253,6 @@
 //! async fn main() {
 //!     let (handle, actor) = GreeterHandle::builder(Greeter {}).build();
 //!     tokio::spawn(actor);
-//!     let handle = GreeterHandle::from_handle(handle);
 //!
 //!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
 //! }
@@ -279,7 +278,6 @@
 //!
 //!     let (handle, actor) = GreeterHandle::builder(Greeter {}).channel((tx, rx)).build();
 //!     tokio::spawn(actor);
-//!     let handle = GreeterHandle::from_handle(handle);
 //!
 //!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
 //! }

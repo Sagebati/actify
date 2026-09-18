@@ -65,7 +65,8 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     let (made_generics, _, made_where) = made.split_for_impl();
     let made_ty = quote! { #handle<#(#names,)* #view, ::actify::DefaultSender<#call_ty>> };
 
-    let constructors = constructors(info, &call_ty);
+    let constructors = constructors(info);
+    let builder = generate_builder(info);
     let methods = info.methods.iter().map(|m| method(m, info, &call_ty));
 
     let doc = format!(
@@ -146,11 +147,13 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
 
             #(#methods)*
         }
+
+        #builder
     }
 }
 
 /// The ways a handle is made.
-fn constructors(info: &ImplInfo, call_ty: &TokenStream) -> TokenStream {
+fn constructors(info: &ImplInfo) -> TokenStream {
     let handle = &info.handle_trait_ident;
     let impl_type = &info.impl_type;
     let view = view();
@@ -171,18 +174,137 @@ fn constructors(info: &ImplInfo, call_ty: &TokenStream) -> TokenStream {
         }
     });
 
+    let builder = builder_ident(info);
+    let names = param_names(info);
     quote! {
         #new
 
         /// Starts building a handle whose actor future the caller spawns.
         ///
-        /// `build` hands back the library's handle and that future; wrap the
-        /// handle with [`from_handle`](Self::from_handle).
+        /// `build` hands back this handle and that future, so the caller
+        /// chooses the executor.
         #[track_caller]
-        pub fn builder(
-            __actify_val: #impl_type,
-        ) -> ::actify::HandleBuilder<#impl_type, #view, #call_ty> {
-            ::actify::__private::builder(__actify_val)
+        pub fn builder(__actify_val: #impl_type) -> #builder<#(#names,)* #view> {
+            #builder(::actify::__private::builder(__actify_val))
+        }
+    }
+}
+
+/// The name of the generated builder, e.g. `GreeterHandleBuilder`.
+fn builder_ident(info: &ImplInfo) -> Ident {
+    let handle = &info.handle_trait_ident;
+    Ident::new(&format!("{handle}Builder"), handle.span())
+}
+
+/// Generates the builder, which is the library's with this actor's handle in
+/// place of the generic one.
+fn generate_builder(info: &ImplInfo) -> TokenStream {
+    let attrs = &info.attributes;
+    let handle = &info.handle_trait_ident;
+    let builder = builder_ident(info);
+    let impl_type = &info.impl_type;
+    let view = view();
+    let call_ty = call_type(info, &view);
+
+    let declared = declared_params(info);
+    let names = param_names(info);
+    let channel = Ident::new("__ActifyC", Span::call_site());
+    let builder_ty = quote! { #builder<#(#names,)* #view, #channel> };
+
+    let mut common = info.generics.clone();
+    common
+        .params
+        .push(syn::parse_quote!(#view: ::std::clone::Clone + Send + Sync + 'static));
+    common
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
+
+    let default_channel = common.clone();
+    let (default_generics, _, default_where) = default_channel.split_for_impl();
+    let default_ty = quote! { #builder<#(#names,)* #view, ::actify::DefaultChannel> };
+
+    let mut own_channel = common.clone();
+    own_channel
+        .params
+        .push(syn::parse_quote!(__ActifyTx: ::actify::JobSender<#call_ty>));
+    own_channel
+        .params
+        .push(syn::parse_quote!(__ActifyRx: ::actify::JobReceiver<#call_ty>));
+    let (own_generics, _, own_where) = own_channel.split_for_impl();
+    let own_ty = quote! { #builder<#(#names,)* #view, (__ActifyTx, __ActifyRx)> };
+
+    let mut bare = info.generics.clone();
+    bare.params.push(syn::parse_quote!(#view));
+    bare.params.push(syn::parse_quote!(#channel));
+    let (bare_generics, _, _) = bare.split_for_impl();
+
+    let doc = format!(
+        "Builds a handle to a `{}` actor, and the future that serves it.",
+        quote! { #impl_type },
+    );
+    let debug_name = builder.to_string();
+
+    quote! {
+        #[doc = #doc]
+        #(#attrs)*
+        pub struct #builder<
+            #(#declared,)*
+            #view = #impl_type,
+            #channel = ::actify::DefaultChannel,
+        >(::actify::HandleBuilder<#impl_type, #view, #call_ty, #channel>);
+
+        #(#attrs)*
+        impl #bare_generics ::std::fmt::Debug for #builder_ty {
+            fn fmt(&self, __actify_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                ::std::write!(__actify_f, "{}", #debug_name)
+            }
+        }
+
+        #(#attrs)*
+        impl #default_generics #default_ty #default_where {
+            /// Serves the actor through a channel the caller owns, in place of
+            /// the default unbounded one.
+            ///
+            /// A bounded channel is how backpressure is asked for.
+            pub fn channel<__ActifyTx, __ActifyRx>(
+                self,
+                __actify_channel: (__ActifyTx, __ActifyRx),
+            ) -> #builder<#(#names,)* #view, (__ActifyTx, __ActifyRx)>
+            where
+                __ActifyTx: ::actify::JobSender<#call_ty>,
+                __ActifyRx: ::actify::JobReceiver<#call_ty>,
+            {
+                #builder(self.0.channel(__actify_channel))
+            }
+
+            /// Returns the handle and the future that serves it.
+            ///
+            /// Nothing runs until the caller polls that future.
+            pub fn build(
+                self,
+            ) -> (
+                #handle<#(#names,)* #view, ::actify::DefaultSender<#call_ty>>,
+                impl ::std::future::Future<Output = ()> + Send,
+            ) {
+                let (__actify_handle, __actify_actor) = self.0.build();
+                (#handle(__actify_handle), __actify_actor)
+            }
+        }
+
+        #(#attrs)*
+        impl #own_generics #own_ty #own_where {
+            /// Returns the handle and the future that serves it, over the
+            /// channel given to `channel`.
+            pub fn build(
+                self,
+            ) -> (
+                #handle<#(#names,)* #view, __ActifyTx>,
+                impl ::std::future::Future<Output = ()> + Send,
+            ) {
+                let (__actify_handle, __actify_actor) = self.0.build();
+                (#handle(__actify_handle), __actify_actor)
+            }
         }
     }
 }

@@ -2,9 +2,9 @@
 
 Actify is a pre-1.0 crate used in production. The API may still change between minor versions.
 
-Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) for any struct. Just add `#[actify]` to an `impl` block and call your methods through a clonable [`Handle`].
+Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) for any struct. Just add `#[actify]` to an `impl` block and call your methods through a clonable handle of the actor's own.
 
-Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies.
+Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies. A call travels to it as a variant of a generated message enum, carrying its arguments and the caller's reply channel, so nothing on the way is boxed.
 
 [![Crates.io][crates-badge]][crates-url]
 [![License][mit-badge]][mit-url]
@@ -31,11 +31,11 @@ By generating the boilerplate code for you, a few key benefits are provided:
 - The caller spawns the actor and supplies its channel, so neither is the crate's choice.
 - [Atomic](https://www.codingem.com/atomic-meaning-in-programming/) access and mutation of underlying data through clonable handles.
 - Typed arguments and return values on the methods from your actor, exposed through each handle.
-- No need to manually define message structs or enums!
-- Built-in methods like `get()`, `set()`, `with()` and `with_mut()` even without using the macro.
+- No need to manually define message enums: the macro writes one, and a call is a variant of it.
+- Built-in `get()` and `set()` even without using the macro.
 - Methods that cannot be actified can stay in the impl block with `#[actify::skip]`.
-- Generic type parameters supported in both actor types and method arguments.
-- Extension traits for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
+- Generic type parameters supported on the actor type.
+- Handles for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
 
 ## Example
 
@@ -60,7 +60,6 @@ async fn main() {
     // future that serves it. Spawn it on whatever executor you use.
     let (handle, actor) = GreeterHandle::builder(Greeter {}).build();
     tokio::spawn(actor);
-    let handle = GreeterHandle::from_handle(handle);
 
     // The say_hi method is made available on its handle through the actify! macro
     let greeting = handle.say_hi("Alfred".to_string()).await;

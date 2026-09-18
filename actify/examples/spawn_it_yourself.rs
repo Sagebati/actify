@@ -35,7 +35,6 @@ fn main() {
     })
     .channel(channel)
     .build();
-    let handle = GreeterHandle::from_handle(handle);
 
     // Nothing runs until the future is polled, and nothing here is Tokio.
     let served = std::thread::spawn(move || futures_executor::block_on(actor));

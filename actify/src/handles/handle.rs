@@ -508,7 +508,6 @@ mod tests {
             .channel(futures_channel::mpsc::channel(CAPACITY))
             .build();
         tokio::spawn(actor);
-        let handle = LedgerHandle::from_handle(handle);
 
         let mut calls = tokio::task::JoinSet::new();
         for i in 0..8 * CAPACITY {
