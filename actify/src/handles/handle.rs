@@ -5,8 +5,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
+use super::builder::HandleBuilder;
 use super::read_handle::ReadHandle;
-use crate::actor::{Actor, ActorMethod, Job, serve};
+use crate::actor::{Actor, ActorMethod, Job};
 
 pub(crate) const CHANNEL_SIZE: usize = 100;
 
@@ -82,8 +83,8 @@ pub struct Handle<T, V = T> {
 /// The sending half every clone of a [`Handle`] shares. It sits behind an
 /// `Arc` so a handle is a single pointer and cloning it is one reference count
 /// increment, and so the actor stops when the last handle drops.
-struct Channels<T> {
-    tx: mpsc::Sender<Job<T>>,
+pub(super) struct Channels<T> {
+    pub(super) tx: mpsc::Sender<Job<T>>,
 }
 
 impl<T, V> Clone for Handle<T, V> {
@@ -144,13 +145,28 @@ where
     /// ```
     #[track_caller]
     pub fn new(val: T) -> Handle<T, V> {
-        let (tx, rx) = mpsc::channel(CHANNEL_SIZE);
-        let actor = Actor::new(val, std::panic::Location::caller());
-        tokio::spawn(serve(rx, actor));
-        Handle {
-            channels: Arc::new(Channels { tx }),
-            view: PhantomData,
-        }
+        let (handle, actor) = Handle::builder(val).build();
+        tokio::spawn(actor);
+        handle
+    }
+
+    /// Starts building a [`Handle`] whose actor future the caller spawns.
+    ///
+    /// Where [`Handle::new`] spawns on Tokio, this hands the future back:
+    ///
+    /// ```
+    /// # use actify::Handle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let (handle, actor) = Handle::builder(0).build();
+    /// tokio::spawn(actor);
+    ///
+    /// assert_eq!(handle.get().await, 0);
+    /// # }
+    /// ```
+    #[track_caller]
+    pub fn builder(val: T) -> HandleBuilder<T, V> {
+        HandleBuilder::new(val)
     }
 
     /// Returns the actor's current view.
@@ -183,6 +199,13 @@ where
 }
 
 impl<T, V> Handle<T, V> {
+    pub(super) fn from_channels(channels: Arc<Channels<T>>) -> Self {
+        Handle {
+            channels,
+            view: PhantomData,
+        }
+    }
+
     /// Returns a [`ReadHandle`] that provides read-only access to this actor.
     pub fn read_handle(&self) -> ReadHandle<T, V> {
         ReadHandle::new(self.clone())
@@ -335,6 +358,32 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A built handle serves calls only once its actor future is spawned, and
+    /// every call panics until then, so the two halves are useless apart.
+    #[tokio::test]
+    async fn test_a_built_actor_serves_once_the_caller_spawns_it() {
+        let (handle, actor) = Handle::builder(1).build();
+
+        let caller = handle.clone();
+        let call = tokio::spawn(async move { caller.get().await });
+
+        tokio::spawn(actor);
+
+        assert_eq!(call.await.unwrap(), 1);
+    }
+
+    /// Dropping the actor future is the same failure as an actor that stopped:
+    /// nothing will ever serve the handle.
+    #[tokio::test]
+    async fn test_dropping_the_actor_future_leaves_a_dead_handle() {
+        let (handle, actor) = Handle::builder(1).build();
+        drop(actor);
+
+        let result = tokio::spawn(async move { handle.get().await }).await;
+
+        assert!(panic_message(result.unwrap_err()).contains("no longer running"));
+    }
 
     /// A handle travels by value: it is held in structs and captured by
     /// futures, so its size is paid on every copy.

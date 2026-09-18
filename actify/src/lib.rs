@@ -403,7 +403,7 @@ pub use extensions::{
     map::HashMapHandle, option::OptionHandle, set::HashSetHandle, string::StringHandle,
     vec::VecHandle, vecdeque::VecDequeHandle,
 };
-pub use handles::{Handle, ReadHandle, ToView};
+pub use handles::{Handle, HandleBuilder, ReadHandle, ToView};
 
 /// The crate's own items that the [`actify`](macro@crate::actify) macro needs in
 /// generated code. Standard library types are named by absolute path instead.
