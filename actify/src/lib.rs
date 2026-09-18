@@ -347,11 +347,13 @@
 //! holds a handle internally and keeps the actor alive.
 //!
 //! A panicking method stops the actor permanently. There is no restart, and
-//! every later call on any handle to it panics, reporting that the actor
-//! panicked. Rust prints the original panic with its message and backtrace.
+//! every later call on any handle to it panics, reporting that the actor is no
+//! longer running. Rust prints the original panic with its message and
+//! backtrace, and the actor's own exit event records the panic at ERROR level.
 //!
-//! Calls after the actor's runtime has shut down panic too, reporting that the
-//! actor is no longer running.
+//! Calls after the actor's runtime has shut down panic with the same message:
+//! a caller learns only that the actor is gone, since the actor task is the
+//! one place the two can be told apart.
 //!
 //! # Instrumentation
 //!

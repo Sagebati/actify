@@ -3,12 +3,19 @@ use std::any::type_name;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 
 use super::read_handle::ReadHandle;
-use crate::actor::{Actor, ActorExit, ActorMethod, ExitState, Job, serve};
+use crate::actor::{Actor, ActorMethod, Job, serve};
 
 pub(crate) const CHANNEL_SIZE: usize = 100;
+
+/// Panics because the actor is gone, whether it stopped or a method of it
+/// panicked. Which of the two it was is on the actor's own exit event, at
+/// ERROR level for a panic, because only the actor task can tell them apart.
+fn report_actor_gone<T>() -> ! {
+    panic!("Actor of type {} is no longer running", type_name::<T>());
+}
 const DOWNCAST_FAIL: &str =
     "Actify Macro error: failed to downcast arguments to their concrete type";
 
@@ -72,12 +79,11 @@ pub struct Handle<T, V = T> {
     view: PhantomData<fn() -> V>,
 }
 
-/// The channel endpoints every clone of a [`Handle`] shares. One `Arc` holds
-/// both, so a handle is a single pointer and cloning it is one reference count
-/// increment.
+/// The sending half every clone of a [`Handle`] shares. It sits behind an
+/// `Arc` so a handle is a single pointer and cloning it is one reference count
+/// increment, and so the actor stops when the last handle drops.
 struct Channels<T> {
     tx: mpsc::Sender<Job<T>>,
-    exit_rx: watch::Receiver<ExitState>,
 }
 
 impl<T, V> Clone for Handle<T, V> {
@@ -139,11 +145,10 @@ where
     #[track_caller]
     pub fn new(val: T) -> Handle<T, V> {
         let (tx, rx) = mpsc::channel(CHANNEL_SIZE);
-        let (exit_tx, exit_rx) = watch::channel(None);
         let actor = Actor::new(val, std::panic::Location::caller());
-        tokio::spawn(serve(rx, actor, exit_tx));
+        tokio::spawn(serve(rx, actor));
         Handle {
-            channels: Arc::new(Channels { tx, exit_rx }),
+            channels: Arc::new(Channels { tx }),
             view: PhantomData,
         }
     }
@@ -182,24 +187,6 @@ impl<T, V> Handle<T, V> {
     pub fn read_handle(&self) -> ReadHandle<T, V> {
         ReadHandle::new(self.clone())
     }
-
-    /// Waits until the actor stops serving jobs, and reports why.
-    ///
-    /// Returns immediately if it has already stopped.
-    async fn wait_for_exit(&self) -> ActorExit {
-        let mut exit_rx = self.channels.exit_rx.clone();
-        loop {
-            if let Some(exit) = *exit_rx.borrow_and_update() {
-                return exit;
-            }
-
-            // The sender is dropped without a value only if the actor task was
-            // discarded before it ever ran, which still means it is gone.
-            if exit_rx.changed().await.is_err() {
-                return ActorExit::Stopped;
-            }
-        }
-    }
 }
 
 impl<T: Send + Sync + 'static, V> Handle<T, V> {
@@ -228,19 +215,7 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
                 return res;
             }
         }
-        self.report_actor_gone().await
-    }
-
-    /// Panics with the reason the actor stopped serving jobs.
-    ///
-    /// The exit signal may not have been written yet when the channel first
-    /// reports its failure, so this waits for it rather than guessing from
-    /// scheduling order.
-    async fn report_actor_gone(&self) -> ! {
-        if self.wait_for_exit().await == ActorExit::Panicked {
-            panic!("A panic occurred in the Actor of type {}", type_name::<T>());
-        }
-        panic!("Actor of type {} is no longer running", type_name::<T>());
+        report_actor_gone::<T>()
     }
 
     /// Sends a closure to the actor, handling all boxing/unboxing internally.
@@ -368,8 +343,8 @@ mod tests {
         assert_eq!(size_of::<Handle<u8>>(), size_of::<usize>());
     }
 
-    /// A panicking actor method must surface as a panic naming that cause, not
-    /// as the generic message used when the actor merely stopped.
+    /// A panicking actor method leaves the actor gone, which the next call
+    /// surfaces as a panic.
     ///
     /// The caller's panic is raised by the handle: the actor's own payload
     /// unwinds the actor task and is not forwarded, which is why the assertion
@@ -385,7 +360,7 @@ mod tests {
         assert_eq!(
             message,
             format!(
-                "A panic occurred in the Actor of type {}",
+                "Actor of type {} is no longer running",
                 type_name::<PanicStruct>()
             )
         );
@@ -408,7 +383,7 @@ mod tests {
         assert_eq!(
             message,
             format!(
-                "A panic occurred in the Actor of type {}",
+                "Actor of type {} is no longer running",
                 type_name::<PanicStruct>()
             )
         );
@@ -419,8 +394,7 @@ mod tests {
     }
 
     /// One clone's call kills the shared actor, so every other clone is left
-    /// holding a handle to a dead actor - and learns it was a panic that
-    /// killed it, not an ordinary shutdown.
+    /// holding a handle to a dead actor.
     #[tokio::test]
     async fn test_actor_panic_is_reported_to_other_clones() {
         let handle = Handle::new(PanicStruct {});
@@ -439,15 +413,15 @@ mod tests {
         assert_eq!(
             message,
             format!(
-                "A panic occurred in the Actor of type {}",
+                "Actor of type {} is no longer running",
                 type_name::<PanicStruct>()
             )
         );
     }
 
-    /// A handle outliving its runtime is a different failure from a panicking
-    /// method, and saying "a panic occurred" there sends readers hunting for a
-    /// panic that never happened.
+    /// A handle outliving its runtime holds an actor that was cancelled
+    /// rather than one that panicked, and a call on it still reports that the
+    /// actor is gone.
     #[test]
     fn test_orphaned_handle_reports_a_stopped_actor() {
         let actor_rt = tokio::runtime::Builder::new_current_thread()

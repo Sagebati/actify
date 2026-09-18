@@ -2,7 +2,7 @@ use std::any::{Any, type_name};
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::pin::Pin;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tracing::Instrument;
 
 /// A boxed future, as returned by an actor method.
@@ -60,9 +60,10 @@ pub(crate) struct Job<T> {
     pub respond_to: oneshot::Sender<Box<dyn Any + Send>>,
 }
 
-/// Why an actor stopped serving jobs.
+/// Why an actor stopped serving jobs. Reported on the actor's own exit event;
+/// a caller only learns that the actor is gone, not which of the two it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ActorExit {
+enum ActorExit {
     /// A method panicked, unwinding the actor task.
     Panicked,
     /// The actor task ended without unwinding, because every handle to it was
@@ -70,16 +71,12 @@ pub(crate) enum ActorExit {
     Stopped,
 }
 
-/// The exit reason, or `None` while the actor is still serving jobs.
-pub(crate) type ExitState = Option<ActorExit>;
-
 /// Reports the exit reason when the actor task ends, however it ends.
 ///
 /// `std::thread::panicking()` is true while a panic unwinds the task, which is
 /// what separates a panicking actor method from a runtime shutdown or a
 /// cancelled task - both of which drop the task without unwinding.
 struct ExitGuard {
-    exit_tx: watch::Sender<ExitState>,
     actor_type: &'static str,
     actor_id: u64,
 }
@@ -108,7 +105,6 @@ impl Drop for ExitGuard {
                 "Actor stopped"
             );
         }
-        let _ = self.exit_tx.send(Some(reason));
     }
 }
 
@@ -124,7 +120,6 @@ impl Drop for ExitGuard {
 pub(crate) fn serve<T: Send + Sync + 'static>(
     rx: mpsc::Receiver<Job<T>>,
     actor: Actor<T>,
-    exit_tx: watch::Sender<ExitState>,
 ) -> impl Future<Output = ()> {
     let span = tracing::info_span!(
         "actor",
@@ -132,16 +127,11 @@ pub(crate) fn serve<T: Send + Sync + 'static>(
         actor_id = actor.id,
         spawned_at = %actor.spawned_at,
     );
-    run(rx, actor, exit_tx).instrument(span)
+    run(rx, actor).instrument(span)
 }
 
-async fn run<T: Send + Sync + 'static>(
-    mut rx: mpsc::Receiver<Job<T>>,
-    mut actor: Actor<T>,
-    exit_tx: watch::Sender<ExitState>,
-) {
+async fn run<T: Send + Sync + 'static>(mut rx: mpsc::Receiver<Job<T>>, mut actor: Actor<T>) {
     let _guard = ExitGuard {
-        exit_tx,
         actor_type: type_name::<T>(),
         actor_id: actor.id,
     };
