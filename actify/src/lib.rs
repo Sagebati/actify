@@ -24,7 +24,7 @@
 //!
 //! Consider the following example, in which you want to turn your custom Greeter into an actor:
 //! ```
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! # use std::fmt::Debug;
 //! # #[derive(Clone, Debug)]
 //! # struct Greeter {}
@@ -38,7 +38,7 @@
 //! #[tokio::main]
 //! async fn main() {
 //!     // An actify handle is created and initialized with the Greeter struct
-//!     let handle = Handle::new(Greeter {});
+//!     let handle = GreeterHandle::new(Greeter {});
 //!
 //!     // The say_hi method is made available on its handle through the actify! macro
 //!     let greeting = handle.say_hi("Alfred".to_string()).await;
@@ -50,8 +50,8 @@
 //!
 //! This roughly desugars to:
 //! ```
-//! # use actify::{Handle, actify};
-//! # use actify::__private::Actor;
+//! # use actify::{Builtin, Dispatch, Handle, actify};
+//! # use actify::__private::{Actor, Reply, reply};
 //! # #[derive(Clone, Debug)]
 //! # struct Greeter {}
 //! impl Greeter {
@@ -60,38 +60,48 @@
 //!     }
 //! }
 //!
-//! // Defines the method signatures exposed on the handle. The future is
-//! // promised to be Send, so a caller generic over this trait can spawn the
-//! // call; `async fn` in a trait would not say that.
-//! pub trait GreeterHandle {
-//!     fn say_hi(&self, name: String) -> impl std::future::Future<Output = String> + Send;
+//! // The message a call travels as. One variant per method, holding that
+//! // call's arguments and the caller's reply channel, so nothing is boxed
+//! // and nothing is downcast.
+//! pub enum GreeterCall<V = Greeter> {
+//!     Builtin(Builtin<Greeter, V>),
+//!     SayHi { name: String, reply: Reply<String> },
 //! }
 //!
-//! // Implements the methods: boxes args, sends a job to the actor,
-//! // which downcasts them and calls the original method on the inner type
-//! #[allow(unused_parens)]
-//! impl GreeterHandle for Handle<Greeter> {
-//!     async fn say_hi(&self, name: String) -> String {
-//!         let res = self
-//!             .__send_job(
-//!                 Box::new(
-//!                     |s: &mut Actor<Greeter>, args: Box<dyn std::any::Any + Send + Sync>|
-//!                     Box::pin(async move {
-//!                         let name: String = *args.downcast().unwrap();
-//!                         let result: String = Greeter::say_hi(&s.inner, name);
-//!                         Box::new(result) as Box<dyn std::any::Any + Send + Sync>
-//!                     })),
-//!                 Box::new(name),
-//!             )
-//!             .await;
-//!
-//!         *res.downcast().unwrap()
+//! // How the actor runs one. A plain trait bound rather than a trait object,
+//! // so the call below is direct.
+//! impl<V: Send + 'static> Dispatch<Greeter> for GreeterCall<V>
+//! where
+//!     Greeter: actify::ToView<V>,
+//! {
+//!     async fn dispatch(self, actor: &mut Actor<Greeter>) {
+//!         match self {
+//!             GreeterCall::Builtin(builtin) => builtin.dispatch(actor).await,
+//!             GreeterCall::SayHi { name, reply } => {
+//!                 let result: String = Greeter::say_hi(&actor.inner, name);
+//!                 actor.respond(reply, result);
+//!             }
+//!         }
 //!     }
 //! }
 //!
+//! // The handle, whose message type is that enum. A method builds its variant
+//! // and waits for the reply.
+//! pub struct GreeterHandle(Handle<Greeter, Greeter, GreeterCall>);
+//!
+//! impl GreeterHandle {
+//!     pub async fn say_hi(&self, name: String) -> String {
+//!         let (reply, get_result) = reply();
+//!         self.0.__call(GreeterCall::SayHi { name, reply }, get_result).await
+//!     }
+//! }
+//!
+//! # impl GreeterHandle {
+//! #     fn new(val: Greeter) -> Self { GreeterHandle(actify::__private::spawn(val)) }
+//! # }
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = Handle::new(Greeter {});
+//!     let handle = GreeterHandle::new(Greeter {});
 //!     let greeting = handle.say_hi("Alfred".to_string()).await;
 //!     assert_eq!(greeting, "hi Alfred".to_string())
 //! }
@@ -100,7 +110,7 @@
 //! ## Async functions in impl blocks
 //! Async functions are fully supported, and work as you would expect:
 //! ```
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! # use std::fmt::Debug;
 //! # #[derive(Clone, Debug)]
 //! # struct AsyncGreeter {}
@@ -113,7 +123,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = Handle::new(AsyncGreeter {});
+//!     let handle = AsyncGreeterHandle::new(AsyncGreeter {});
 //!     let greeting = handle.async_hi("Alfred".to_string()).await;
 //!     assert_eq!(greeting, "hi Alfred".to_string())
 //! }
@@ -122,7 +132,7 @@
 //! ## Generics in the actor type
 //! Generics in the actor type are fully supported, as long as they implement Clone, Debug, Send, Sync and 'static:
 //! ```
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! # use std::fmt::Debug;
 //! # #[derive(Clone, Debug)]
 //! struct GenericGreeter<T> {
@@ -141,7 +151,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = Handle::new(GenericGreeter { inner: usize::default() });
+//!     let handle = GenericGreeterHandle::new(GenericGreeter { inner: usize::default() });
 //!     let greeting = handle.generic_hi("Alfred".to_string()).await;
 //!     assert_eq!(greeting, "hi Alfred from 0".to_string())
 //! }
@@ -151,7 +161,7 @@
 //! Generic method parameters are supported when they have appropriate trait bounds.
 //! The type parameters must be `Send + Sync + 'static`:
 //! ```
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! # use std::fmt::Debug;
 //! # #[derive(Clone, Debug)]
 //! # struct Greeter { }
@@ -168,7 +178,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = Handle::new(Greeter {});
+//!     let handle = GreeterHandle::new(Greeter {});
 //!     let result = handle.apply(5, |x| x * 2).await;
 //!     assert_eq!(result, 10);
 //! }
@@ -195,7 +205,7 @@
 //! caller chooses the executor. Nothing runs until that future is polled.
 //!
 //! ```
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! # #[derive(Clone, Debug)]
 //! # struct Greeter {}
 //! # #[actify]
@@ -204,8 +214,9 @@
 //! # }
 //! #[tokio::main]
 //! async fn main() {
-//!     let (handle, actor) = Handle::builder(Greeter {}).build();
+//!     let (handle, actor) = GreeterHandle::builder(Greeter {}).build();
 //!     tokio::spawn(actor);
+//!     let handle = GreeterHandle::from_handle(handle);
 //!
 //!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
 //! }
@@ -218,7 +229,7 @@
 //! `tokio-util`, a Tokio `mpsc`:
 //!
 //! ```
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! # #[derive(Clone, Debug)]
 //! # struct Greeter {}
 //! # #[actify]
@@ -229,8 +240,9 @@
 //! async fn main() {
 //!     let (tx, rx) = futures_channel::mpsc::channel(32);
 //!
-//!     let (handle, actor) = Handle::builder(Greeter {}).channel((tx, rx)).build();
+//!     let (handle, actor) = GreeterHandle::builder(Greeter {}).channel((tx, rx)).build();
 //!     tokio::spawn(actor);
+//!     let handle = GreeterHandle::from_handle(handle);
 //!
 //!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
 //! }
@@ -297,35 +309,35 @@
 //!
 //! # Multiple impl blocks
 //!
-//! Each `#[actify]` block generates a trait named `{Type}Handle`. To use multiple
-//! impl blocks on the same type, provide a custom trait name with `name = "..."` to
-//! avoid collisions:
+//! Each `#[actify]` block generates a handle struct named `{Type}Handle` and a
+//! message enum named `{Type}Call`. Both belong to that one block, and an actor
+//! owns one state served through one channel, so every method of an actor has
+//! to live in a single block:
 //!
 //! ```
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! # #[derive(Clone, Debug)]
 //! struct Counter { value: i32 }
 //!
 //! #[actify]
 //! impl Counter {
 //!     fn increment(&mut self) { self.value += 1; }
-//! }
 //!
-//! #[actify(name = "CounterGetters")]
-//! impl Counter {
 //!     fn value(&self) -> i32 { self.value }
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = Handle::new(Counter { value: 0 });
+//!     let handle = CounterHandle::new(Counter { value: 0 });
 //!     handle.increment().await;
 //!     assert_eq!(handle.value().await, 1);
 //! }
 //! ```
 //!
-//! The first block generates `CounterHandle`, the second generates `CounterGetters`.
-//! Both traits are automatically implemented for `Handle<Counter>`.
+//! A second block on the same type generates the same two names, which the
+//! compiler reports as items defined twice. Splitting a type's methods across
+//! blocks that a `#[cfg]` makes mutually exclusive still works, because only
+//! one of them ever exists.
 //!
 //! # ReadHandle
 //!
@@ -375,15 +387,15 @@
 //! its own handle.
 //!
 //! ```no_run
-//! # use actify::{Handle, actify};
+//! # use actify::actify;
 //! #[derive(Clone, Debug)]
 //! struct Parser {
-//!     store: Option<Handle<Store>>,
+//!     store: Option<StoreHandle>,
 //! }
 //!
 //! #[derive(Clone, Debug)]
 //! struct Store {
-//!     parser: Option<Handle<Parser>>,
+//!     parser: Option<ParserHandle>,
 //! }
 //!
 //! #[actify]
@@ -485,4 +497,7 @@ pub use message::{Builtin, Job};
 #[doc(hidden)]
 pub mod __private {
     pub use crate::actor::{Actor, ClosureJob, Reply, reply};
+    pub use crate::handles::builder;
+    #[cfg(feature = "tokio")]
+    pub use crate::handles::spawn;
 }

@@ -27,6 +27,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 default = ["tokio"]
 # `Handle::new`, which builds an actor and spawns it on Tokio in one call.
 # Without it the caller spawns the actor future itself, on any executor.
-tokio = ["dep:tokio"]
+tokio = ["dep:tokio", "actify-macros/tokio"]
 # Emits the events as log records whenever no tracing subscriber is set.
 log = ["tracing/log"]

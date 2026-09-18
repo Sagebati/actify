@@ -39,7 +39,7 @@ trait ActorOption<T> {
         F: FnOnce() -> T + Send + Sync + 'static;
 }
 
-/// Extension methods for `Handle<Option<T>>`, exposed as [`OptionHandle`](crate::OptionHandle).
+/// Methods on [`OptionHandle`](crate::OptionHandle), for an actor holding a `Option<T>>`, exposed as [`OptionHandle`](crate::OptionHandle).
 #[actify]
 impl<T> ActorOption<T> for Option<T>
 where
@@ -50,10 +50,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Some(1));
+    /// let handle = OptionHandle::new(Some(1));
     /// assert!(handle.is_some().await);
     /// # }
     /// ```
@@ -66,10 +66,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Option::<i32>::None);
+    /// let handle = OptionHandle::new(Option::<i32>::None);
     /// assert!(handle.is_none().await);
     /// # }
     /// ```
@@ -82,10 +82,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Some(42));
+    /// let handle = OptionHandle::new(Some(42));
     /// assert_eq!(handle.take().await, Some(42));
     /// assert!(handle.is_none().await);
     /// # }
@@ -99,10 +99,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Some(1));
+    /// let handle = OptionHandle::new(Some(1));
     /// assert_eq!(handle.replace(2).await, Some(1));
     /// assert_eq!(handle.get().await, Some(2));
     /// # }
@@ -116,13 +116,13 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Some(10));
+    /// let handle = OptionHandle::new(Some(10));
     /// assert_eq!(handle.unwrap_or(0).await, 10);
     ///
-    /// let handle = Handle::new(Option::<i32>::None);
+    /// let handle = OptionHandle::new(Option::<i32>::None);
     /// assert_eq!(handle.unwrap_or(0).await, 0);
     /// # }
     /// ```
@@ -135,10 +135,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Option::<i32>::None);
+    /// let handle = OptionHandle::new(Option::<i32>::None);
     /// assert_eq!(handle.unwrap_or_default().await, 0);
     /// # }
     /// ```
@@ -154,10 +154,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Option::<i32>::None);
+    /// let handle = OptionHandle::new(Option::<i32>::None);
     /// assert_eq!(handle.unwrap_or_else(|| 42).await, 42);
     /// # }
     /// ```
@@ -175,10 +175,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Some(4));
+    /// let handle = OptionHandle::new(Some(4));
     /// assert_eq!(handle.filter(|x| *x > 3).await, Some(4));
     /// assert_eq!(handle.filter(|x| *x > 5).await, None);
     /// # }
@@ -196,10 +196,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Some(3));
+    /// let handle = OptionHandle::new(Some(3));
     /// let doubled: Option<i32> = handle.map(|x| x * 2).await;
     /// assert_eq!(doubled, Some(6));
     /// # }
@@ -218,10 +218,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(Some(2));
+    /// let handle = OptionHandle::new(Some(2));
     /// assert_eq!(handle.take_if(|v| *v == 9).await, None);
     /// assert_eq!(handle.get().await, Some(2));
     ///
@@ -242,10 +242,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, OptionHandle};
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(None);
+    /// let handle = OptionHandle::new(None);
     /// assert_eq!(handle.get_or_insert_with(|| 2).await, 2);
     /// assert_eq!(handle.get_or_insert_with(|| 9).await, 2);
     /// assert_eq!(handle.get().await, Some(2));
@@ -262,11 +262,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Handle;
 
     #[tokio::test]
     async fn test_the_defaults_apply_only_when_none() {
-        let handle: Handle<Option<i32>> = Handle::new(None);
+        let handle: OptionHandle<i32> = OptionHandle::new(None);
 
         assert_eq!(handle.unwrap_or(9).await, 9);
         assert_eq!(handle.unwrap_or_default().await, 0);
@@ -278,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_and_map_on_none() {
-        let handle: Handle<Option<i32>> = Handle::new(None);
+        let handle: OptionHandle<i32> = OptionHandle::new(None);
 
         assert_eq!(handle.filter(|_: &i32| true).await, None);
         assert_eq!(handle.map(|value: i32| value * 2).await, None);
@@ -286,7 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_rejects_and_map_changes_type() {
-        let handle = Handle::new(Some(3));
+        let handle = OptionHandle::new(Some(3));
 
         assert_eq!(handle.filter(|value: &i32| *value > 5).await, None);
         assert_eq!(handle.filter(|value: &i32| *value > 1).await, Some(3));
@@ -301,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_take_when_none() {
-        let handle = Handle::new(Option::<i32>::None);
+        let handle = OptionHandle::new(Option::<i32>::None);
 
         assert_eq!(handle.take().await, None);
         assert!(handle.is_none().await);
@@ -309,7 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_take_if_only_takes_what_the_predicate_accepts() {
-        let handle = Handle::new(Some(2));
+        let handle = OptionHandle::new(Some(2));
 
         assert_eq!(handle.take_if(|value: &mut i32| *value == 9).await, None);
         assert_eq!(handle.get().await, Some(2));
@@ -322,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_or_insert_with_only_inserts_when_none() {
-        let handle: Handle<Option<i32>> = Handle::new(None);
+        let handle: OptionHandle<i32> = OptionHandle::new(None);
 
         assert_eq!(handle.get_or_insert_with(|| 2).await, 2);
         assert_eq!(handle.get_or_insert_with(|| 9).await, 2);

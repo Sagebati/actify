@@ -42,7 +42,7 @@ By generating the boilerplate code for you, a few key benefits are provided:
 Consider the following example, in which you want to turn your custom Greeter into an actor:
 
 ```rust
-use actify::{Handle, actify};
+use actify::actify;
 
 #[derive(Clone, std::fmt::Debug)]
 struct Greeter {}
@@ -58,8 +58,9 @@ impl Greeter {
 async fn main() {
     // The handle is initialized with the Greeter struct, and `actor` is the
     // future that serves it. Spawn it on whatever executor you use.
-    let (handle, actor) = Handle::builder(Greeter {}).build();
+    let (handle, actor) = GreeterHandle::builder(Greeter {}).build();
     tokio::spawn(actor);
+    let handle = GreeterHandle::from_handle(handle);
 
     // The say_hi method is made available on its handle through the actify! macro
     let greeting = handle.say_hi("Alfred".to_string()).await;
@@ -69,8 +70,8 @@ async fn main() {
 }
 ```
 
-`Handle::new` is the same two lines, spawning on Tokio, behind the default
-`tokio` feature.
+`GreeterHandle::new` is the same three lines, spawning on Tokio, behind the
+default `tokio` feature.
 
 ## Bring your own channel
 

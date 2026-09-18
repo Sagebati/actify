@@ -55,7 +55,7 @@ trait ActorString {
         R: RangeBounds<usize> + Send + Sync + 'static;
 }
 
-/// Extension methods for `Handle<String>`, exposed as [`StringHandle`](crate::StringHandle).
+/// Methods on [`StringHandle`](crate::StringHandle), for an actor holding a `String>`, exposed as [`StringHandle`](crate::StringHandle).
 #[actify]
 impl ActorString for String {
     /// Returns the length of the string in bytes.
@@ -63,10 +63,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello".to_string());
+    /// let handle = StringHandle::new("hello".to_string());
     /// assert_eq!(handle.len().await, 5);
     /// # }
     /// ```
@@ -79,10 +79,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(String::new());
+    /// let handle = StringHandle::new(String::new());
     /// assert!(handle.is_empty().await);
     /// # }
     /// ```
@@ -95,10 +95,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello".to_string());
+    /// let handle = StringHandle::new("hello".to_string());
     /// handle.clear().await;
     /// assert!(handle.is_empty().await);
     /// # }
@@ -116,10 +116,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// handle.truncate(5).await;
     /// assert_eq!(handle.get().await, "hello");
     /// # }
@@ -133,10 +133,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello".to_string());
+    /// let handle = StringHandle::new("hello".to_string());
     /// assert_eq!(handle.to_uppercase().await, "HELLO");
     /// # }
     /// ```
@@ -149,10 +149,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("HELLO".to_string());
+    /// let handle = StringHandle::new("HELLO".to_string());
     /// assert_eq!(handle.to_lowercase().await, "hello");
     /// # }
     /// ```
@@ -165,10 +165,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello".to_string());
+    /// let handle = StringHandle::new("hello".to_string());
     /// handle.push_str(" world".to_string()).await;
     /// assert_eq!(handle.get().await, "hello world");
     /// # }
@@ -182,10 +182,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello".to_string());
+    /// let handle = StringHandle::new("hello".to_string());
     /// handle.push('!').await;
     /// assert_eq!(handle.get().await, "hello!");
     /// # }
@@ -199,10 +199,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// assert!(handle.contains("world".to_string()).await);
     /// assert!(!handle.contains("xyz".to_string()).await);
     /// # }
@@ -216,10 +216,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// let result = handle.replace("world".to_string(), "rust".to_string()).await;
     /// assert_eq!(result, "hello rust");
     /// # }
@@ -233,10 +233,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("  hello  ".to_string());
+    /// let handle = StringHandle::new("  hello  ".to_string());
     /// assert_eq!(handle.trim().await, "hello");
     /// # }
     /// ```
@@ -249,10 +249,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// assert!(handle.starts_with("hello".to_string()).await);
     /// # }
     /// ```
@@ -265,10 +265,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// assert!(handle.ends_with("world".to_string()).await);
     /// # }
     /// ```
@@ -281,10 +281,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("a,b,c".to_string());
+    /// let handle = StringHandle::new("a,b,c".to_string());
     /// let parts = handle.split(",".to_string()).await;
     /// assert_eq!(parts, vec!["a", "b", "c"]);
     /// # }
@@ -298,10 +298,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hi".to_string());
+    /// let handle = StringHandle::new("hi".to_string());
     /// assert_eq!(handle.pop().await, Some('i'));
     /// assert_eq!(handle.get().await, "h");
     /// # }
@@ -321,10 +321,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("abc".to_string());
+    /// let handle = StringHandle::new("abc".to_string());
     /// assert_eq!(handle.remove(1).await, 'b');
     /// assert_eq!(handle.get().await, "ac");
     /// # }
@@ -344,10 +344,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("ac".to_string());
+    /// let handle = StringHandle::new("ac".to_string());
     /// handle.insert(1, 'b').await;
     /// assert_eq!(handle.get().await, "abc");
     /// # }
@@ -367,10 +367,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("ad".to_string());
+    /// let handle = StringHandle::new("ad".to_string());
     /// handle.insert_str(1, "bc".to_string()).await;
     /// assert_eq!(handle.get().await, "abcd");
     /// # }
@@ -384,10 +384,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("a1b2".to_string());
+    /// let handle = StringHandle::new("a1b2".to_string());
     /// handle.retain(|c| c.is_alphabetic()).await;
     /// assert_eq!(handle.get().await, "ab");
     /// # }
@@ -409,10 +409,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// assert_eq!(handle.drain(..6).await, "hello ");
     /// assert_eq!(handle.get().await, "world");
     /// # }
@@ -435,10 +435,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// assert_eq!(handle.split_off(5).await, " world");
     /// assert_eq!(handle.get().await, "hello");
     /// # }
@@ -458,10 +458,10 @@ impl ActorString for String {
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, StringHandle};
+    /// # use actify::StringHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new("hello world".to_string());
+    /// let handle = StringHandle::new("hello world".to_string());
     /// handle.replace_range(0..5, "goodbye".to_string()).await;
     /// assert_eq!(handle.get().await, "goodbye world");
     /// # }
@@ -477,11 +477,10 @@ impl ActorString for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Handle;
 
     #[tokio::test]
     async fn test_mutations_reach_the_actor() {
-        let handle = Handle::new(String::new());
+        let handle = StringHandle::new(String::new());
 
         handle.push_str("hello".to_string()).await;
         handle.push(' ').await;
@@ -499,7 +498,7 @@ mod tests {
     /// borrowed can leave the actor.
     #[tokio::test]
     async fn test_readers_return_owned_values() {
-        let handle = Handle::new("  Hello World  ".to_string());
+        let handle = StringHandle::new("  Hello World  ".to_string());
 
         assert_eq!(handle.trim().await, "Hello World");
         assert_eq!(handle.to_uppercase().await, "  HELLO WORLD  ");
@@ -518,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pattern_queries() {
-        let handle = Handle::new("hello world".to_string());
+        let handle = StringHandle::new("hello world".to_string());
 
         assert!(handle.contains("lo wo".to_string()).await);
         assert!(handle.starts_with("hello".to_string()).await);
@@ -528,7 +527,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_removals_return_what_they_removed() {
-        let handle = Handle::new("hello world".to_string());
+        let handle = StringHandle::new("hello world".to_string());
 
         assert_eq!(handle.pop().await, Some('d'));
         assert_eq!(handle.remove(1).await, 'e');
@@ -538,13 +537,13 @@ mod tests {
         assert_eq!(handle.split_off(1).await, "worl");
         assert_eq!(handle.get().await, " ");
 
-        let empty = Handle::new(String::new());
+        let empty = StringHandle::new(String::new());
         assert_eq!(empty.pop().await, None);
     }
 
     #[tokio::test]
     async fn test_insertions_land_at_the_given_index() {
-        let handle = Handle::new("ad".to_string());
+        let handle = StringHandle::new("ad".to_string());
 
         handle.insert(1, 'c').await;
         assert_eq!(handle.get().await, "acd");
@@ -558,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_retain_keeps_what_the_predicate_accepts() {
-        let handle = Handle::new("a1b2c3".to_string());
+        let handle = StringHandle::new("a1b2c3".to_string());
 
         handle.retain(|c: char| c.is_ascii_digit()).await;
         assert_eq!(handle.get().await, "123");

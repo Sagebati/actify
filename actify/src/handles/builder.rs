@@ -8,6 +8,37 @@ use crate::actor::{Actor, Dispatch, serve};
 use crate::channel::{JobReceiver, JobSender};
 use crate::message::Job;
 
+/// Starts a builder for an actor served with the message type `M`.
+///
+/// [`Handle::builder`] fixes the message to the library's own; generated code
+/// calls this to fix it to the actor's.
+#[doc(hidden)]
+#[track_caller]
+pub fn builder<T, V, M>(val: T) -> HandleBuilder<T, V, M>
+where
+    T: ToView<V> + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: Dispatch<T>,
+{
+    HandleBuilder::new(val)
+}
+
+/// Builds an actor, spawns it on Tokio and returns its handle, as
+/// [`Handle::new`] does, with the message type `M`.
+#[cfg(feature = "tokio")]
+#[doc(hidden)]
+#[track_caller]
+pub fn spawn<T, V, M>(val: T) -> Handle<T, V, M>
+where
+    T: ToView<V> + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: Dispatch<T>,
+{
+    let (handle, actor) = builder::<T, V, M>(val).build();
+    tokio::spawn(actor);
+    handle
+}
+
 /// A builder that has not been given a channel, so [`build`] makes the default
 /// one.
 ///
@@ -71,7 +102,7 @@ where
 {
     /// Captures the call site so the actor's span names where it was built.
     #[track_caller]
-    pub(super) fn new(val: T) -> Self {
+    pub(crate) fn new(val: T) -> Self {
         HandleBuilder {
             val,
             spawned_at: Location::caller(),

@@ -42,7 +42,7 @@ trait ActorMap<K, V> {
         F: FnOnce(&mut V) + Send + Sync + 'static;
 }
 
-/// Extension methods for `Handle<HashMap<K, V>>`, exposed as [`HashMapHandle`](crate::HashMapHandle).
+/// Methods on [`HashMapHandle`](crate::HashMapHandle), for an actor holding a `HashMap<K, V>>`, exposed as [`HashMapHandle`](crate::HashMapHandle).
 #[actify]
 impl<K, V> ActorMap<K, V> for HashMap<K, V>
 where
@@ -56,11 +56,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("test", 10).await;
     /// let res = handle.get_key("test").await;
     /// assert_eq!(res, Some(10));
@@ -78,11 +78,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// let res = handle.insert("test", 10).await;
     /// assert_eq!(res, None);
     ///
@@ -100,11 +100,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("test", 10).await;
     /// let res = handle.remove("test").await;
     /// assert_eq!(res, Some(10));
@@ -123,11 +123,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("test", 10).await;
     /// handle.clear().await;
     /// assert!(handle.is_empty().await);
@@ -142,11 +142,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::<&str, i32>::new());
+    /// let handle = HashMapHandle::new(HashMap::<&str, i32>::new());
     /// assert!(handle.is_empty().await);
     /// # }
     /// ```
@@ -160,11 +160,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// handle.insert("b", 2).await;
     /// let mut keys = handle.keys().await;
@@ -182,11 +182,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// handle.insert("b", 2).await;
     /// let mut values = handle.values().await;
@@ -203,11 +203,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// handle.insert("b", 2).await;
     /// assert_eq!(handle.len().await, 2);
@@ -222,11 +222,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// assert!(handle.contains_key("a").await);
     /// assert!(!handle.contains_key("b").await);
@@ -241,11 +241,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// let items = handle.drain().await;
     /// assert_eq!(items, vec![("a", 1)]);
@@ -261,11 +261,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.extend(vec![("a", 1), ("b", 2)]).await;
     /// assert_eq!(handle.len().await, 2);
     /// # }
@@ -279,11 +279,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::new());
+    /// let handle = HashMapHandle::new(HashMap::new());
     /// handle.extend(vec![("a", 1), ("b", 2), ("c", 3)]).await;
     /// handle.retain(|_k, v| *v > 1).await;
     /// assert_eq!(handle.len().await, 2);
@@ -302,11 +302,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::<&str, i32>::new());
+    /// let handle = HashMapHandle::new(HashMap::<&str, i32>::new());
     /// let val = handle.get_or_insert_with("a", || 42).await;
     /// assert_eq!(val, 42);
     /// let val = handle.get_or_insert_with("a", || 99).await;
@@ -330,11 +330,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::from([("a", 1)]));
+    /// let handle = HashMapHandle::new(HashMap::from([("a", 1)]));
     /// assert_eq!(handle.remove_entry("a").await, Some(("a", 1)));
     /// assert_eq!(handle.remove_entry("a").await, None);
     /// # }
@@ -349,11 +349,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, HashMapHandle};
+    /// # use actify::HashMapHandle;
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(HashMap::from([("a", 1)]));
+    /// let handle = HashMapHandle::new(HashMap::from([("a", 1)]));
     ///
     /// assert!(handle.modify("a", |v| *v += 10).await);
     /// assert_eq!(handle.get_key("a").await, Some(11));
@@ -378,10 +378,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Handle;
 
-    fn map() -> Handle<HashMap<String, i32>> {
-        Handle::new(HashMap::from([("a".to_string(), 1), ("b".to_string(), 2)]))
+    fn map() -> HashMapHandle<String, i32> {
+        HashMapHandle::new(HashMap::from([("a".to_string(), 1), ("b".to_string(), 2)]))
     }
 
     #[tokio::test]
@@ -458,7 +457,7 @@ mod tests {
             id: 1,
             label: "lookup",
         };
-        let handle = Handle::new(HashMap::from([(stored, 7)]));
+        let handle = HashMapHandle::new(HashMap::from([(stored, 7)]));
 
         let (key, value) = handle.remove_entry(lookup.clone()).await.unwrap();
         assert_eq!(key.label, "stored");

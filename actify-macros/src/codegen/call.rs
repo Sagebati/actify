@@ -70,7 +70,7 @@ pub fn call_type(info: &ImplInfo, view: &Ident) -> TokenStream {
 }
 
 /// The impl block's parameters by name alone, for naming a type that takes them.
-fn param_names(info: &ImplInfo) -> Vec<TokenStream> {
+pub fn param_names(info: &ImplInfo) -> Vec<TokenStream> {
     info.generics
         .params
         .iter()
@@ -96,7 +96,7 @@ fn param_names(info: &ImplInfo) -> Vec<TokenStream> {
 /// Bounds belong on the impls, not on the type: an enum that demanded them
 /// would force every mention of it to prove them, including in a signature that
 /// only names the type.
-fn declared_params(info: &ImplInfo) -> Vec<TokenStream> {
+pub fn declared_params(info: &ImplInfo) -> Vec<TokenStream> {
     info.generics
         .params
         .iter()
@@ -210,6 +210,8 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         pub enum #call<#(#declared,)* #view = #impl_type> {
             /// One of the calls every handle has, whatever its actor declares.
             __ActifyBuiltin(::actify::Builtin<#impl_type, #view>),
+            /// A call that cannot travel as data, carried as a closure.
+            __ActifyClosure(::actify::__private::ClosureJob<#impl_type>),
             #(#variants)*
         }
 
@@ -223,10 +225,21 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         }
 
         #(#attrs)*
+        impl #impl_generics
+            ::std::convert::From<::actify::__private::ClosureJob<#impl_type>>
+            for #call_ty #where_clause
+        {
+            fn from(__actify_job: ::actify::__private::ClosureJob<#impl_type>) -> Self {
+                #call::__ActifyClosure(__actify_job)
+            }
+        }
+
+        #(#attrs)*
         impl #impl_generics ::std::fmt::Debug for #call_ty #where_clause {
             fn fmt(&self, __actify_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 let __actify_variant = match self {
                     #call::__ActifyBuiltin(_) => "Builtin",
+                    #call::__ActifyClosure(_) => "Closure",
                     #(#debug_arms)*
                 };
                 ::std::write!(__actify_f, "{}::{}", #call_name, __actify_variant)
@@ -246,6 +259,9 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
                 match self {
                     #call::__ActifyBuiltin(__actify_builtin) => {
                         ::actify::Dispatch::dispatch(__actify_builtin, __actify_actor).await
+                    }
+                    #call::__ActifyClosure(__actify_job) => {
+                        ::actify::Dispatch::dispatch(__actify_job, __actify_actor).await
                     }
                     #(#arms)*
                 }

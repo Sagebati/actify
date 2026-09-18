@@ -441,7 +441,7 @@ mod tests {
     /// checks for the handle's message and against the actor's.
     #[tokio::test]
     async fn test_actor_panic_is_reported_as_a_panic() {
-        let handle = Handle::new(PanicStruct {});
+        let handle = PanicStructHandle::new(PanicStruct {});
         let clone = handle.clone();
 
         let result = tokio::spawn(async move { clone.panic().await }).await;
@@ -464,7 +464,7 @@ mod tests {
     /// different point in the job's lifetime than a sync one.
     #[tokio::test]
     async fn test_async_actor_panic_is_reported_as_a_panic() {
-        let handle = Handle::new(PanicStruct {});
+        let handle = PanicStructHandle::new(PanicStruct {});
         let clone = handle.clone();
 
         let result = tokio::spawn(async move { clone.panic_async().await }).await;
@@ -487,7 +487,7 @@ mod tests {
     /// holding a handle to a dead actor.
     #[tokio::test]
     async fn test_actor_panic_is_reported_to_other_clones() {
-        let handle = Handle::new(PanicStruct {});
+        let handle = PanicStructHandle::new(PanicStruct {});
         let victim = handle.clone();
         let bystander = handle.clone();
 
@@ -562,7 +562,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_a_non_clone_actor_can_be_read() {
-            let handle: Handle<NonCloneActor, i32> = Handle::new(NonCloneActor { value: 1 });
+            let handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 1 });
 
             assert_eq!(handle.get().await, 1);
             assert_eq!(handle.read_handle().get().await, 1);
@@ -590,7 +590,7 @@ mod tests {
     /// channel while the job is still queued or running.
     #[tokio::test(start_paused = true)]
     async fn test_abandoned_call_does_not_stop_the_actor() {
-        let handle = Handle::new(SlowActor {});
+        let handle = SlowActorHandle::new(SlowActor {});
 
         let slow = handle.clone();
         let abandoned =
@@ -623,10 +623,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_callers_wait_when_a_bounded_job_channel_is_full() {
         const CAPACITY: usize = 4;
-        let (handle, actor) = Handle::builder(Ledger { seen: Vec::new() })
+        let (handle, actor) = LedgerHandle::builder(Ledger { seen: Vec::new() })
             .channel(futures_channel::mpsc::channel(CAPACITY))
             .build();
         tokio::spawn(actor);
+        let handle = LedgerHandle::from_handle(handle);
 
         let mut calls = tokio::task::JoinSet::new();
         for i in 0..8 * CAPACITY {
@@ -635,7 +636,7 @@ mod tests {
         }
         while calls.join_next().await.is_some() {}
 
-        let mut seen = handle.with(|ledger| ledger.seen.clone()).await;
+        let mut seen = handle.seen().await;
         seen.sort();
         assert_eq!(seen, (0..8 * CAPACITY).collect::<Vec<_>>());
     }
@@ -645,7 +646,7 @@ mod tests {
     /// would make the sends alone outlive the actor's first job.
     #[tokio::test(start_paused = true)]
     async fn test_the_default_channel_never_makes_a_caller_wait_to_queue() {
-        let handle = Handle::new(Ledger { seen: Vec::new() });
+        let handle = LedgerHandle::new(Ledger { seen: Vec::new() });
 
         let mut calls = tokio::task::JoinSet::new();
         for i in 0..1000 {
@@ -654,7 +655,7 @@ mod tests {
         }
         while calls.join_next().await.is_some() {}
 
-        assert_eq!(handle.with(|ledger| ledger.seen.len()).await, 1000);
+        assert_eq!(handle.count().await, 1000);
     }
 
     #[derive(Debug, Clone)]
@@ -667,6 +668,14 @@ mod tests {
         async fn record(&mut self, i: usize) {
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             self.seen.push(i);
+        }
+
+        fn seen(&self) -> Vec<usize> {
+            self.seen.clone()
+        }
+
+        fn count(&self) -> usize {
+            self.seen.len()
         }
     }
 
@@ -719,7 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_non_clone_actor() {
-        let handle: Handle<NonCloneActor, i32> = Handle::new(NonCloneActor { value: 42 });
+        let handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
         assert_eq!(handle.get_value().await, 42);
 
         handle.set_value(100).await;
@@ -733,7 +742,7 @@ mod tests {
     /// type itself must also keep current.
     #[tokio::test]
     async fn test_non_clone_actor_is_read_through_its_view() {
-        let handle: Handle<NonCloneActor, i32> = Handle::new(NonCloneActor { value: 42 });
+        let handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
 
         handle.set_value(100).await;
         assert_eq!(handle.get().await, 100);

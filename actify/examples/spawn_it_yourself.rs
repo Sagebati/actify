@@ -1,13 +1,13 @@
 //! An actor served on an executor that is not Tokio.
 //!
-//! `Handle::builder` hands back the actor's future instead of spawning it, so
-//! the executor is the caller's choice. Here it is `futures_executor`, running
-//! the actor on a thread of its own, and the channel between the two is
-//! `futures_channel`'s.
+//! The generated handle's `builder` hands back the actor's future instead of
+//! spawning it, so the executor is the caller's choice. Here it is
+//! `futures_executor`, running the actor on a thread of its own, and the
+//! channel between the two is `futures_channel`'s.
 //!
 //! Run it with `cargo run --example spawn_it_yourself`.
 
-use actify::{Handle, actify};
+use actify::actify;
 
 #[derive(Clone, Debug)]
 struct Greeter {
@@ -30,11 +30,12 @@ fn main() {
     // default is unbounded; either half can come from any channel crate.
     let channel = futures_channel::mpsc::channel(32);
 
-    let (handle, actor) = Handle::builder(Greeter {
+    let (handle, actor) = GreeterHandle::builder(Greeter {
         greeting: "hi".to_string(),
     })
     .channel(channel)
     .build();
+    let handle = GreeterHandle::from_handle(handle);
 
     // Nothing runs until the future is polled, and nothing here is Tokio.
     let served = std::thread::spawn(move || futures_executor::block_on(actor));
