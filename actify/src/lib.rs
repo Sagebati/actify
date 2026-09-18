@@ -50,8 +50,8 @@
 //!
 //! This roughly desugars to:
 //! ```
-//! # use actify::{Builtin, Dispatch, Handle, actify};
-//! # use actify::__private::{Actor, Reply, reply};
+//! # use actify::{Builtin, actify};
+//! # use actify::__private::{Actor, Reply, reply, run_builtin};
 //! # #[derive(Clone, Debug)]
 //! # struct Greeter {}
 //! impl Greeter {
@@ -68,15 +68,15 @@
 //!     SayHi { name: String, reply: Reply<String> },
 //! }
 //!
-//! // How the actor runs one. A plain trait bound rather than a trait object,
-//! // so the call below is direct.
-//! impl<V: Send + 'static> Dispatch<Greeter> for GreeterCall<V>
+//! // The actor's loop, which the library wraps in the span and the guard that
+//! // report the actor's life. A plain match, so the call below is direct.
+//! pub async fn run_greeter<R>(mut rx: R, mut actor: Actor<Greeter>)
 //! where
-//!     Greeter: actify::ToView<V>,
+//!     R: actify::JobReceiver<GreeterCall>,
 //! {
-//!     async fn dispatch(self, actor: &mut Actor<Greeter>) {
-//!         match self {
-//!             GreeterCall::Builtin(builtin) => builtin.dispatch(actor).await,
+//!     while let Some(call) = actify::JobReceiver::recv(&mut rx).await {
+//!         match call {
+//!             GreeterCall::Builtin(builtin) => run_builtin(&mut actor, builtin),
 //!             GreeterCall::SayHi { name, reply } => {
 //!                 let result: String = Greeter::say_hi(&actor.inner, name);
 //!                 actor.respond(reply, result);
@@ -87,18 +87,19 @@
 //!
 //! // The handle, whose message type is that enum. A method builds its variant
 //! // and waits for the reply.
-//! pub struct GreeterHandle(Handle<Greeter, Greeter, GreeterCall>);
+//! pub struct GreeterHandle(actify::Handle<Greeter, Greeter, GreeterCall>);
 //!
 //! impl GreeterHandle {
+//!     pub fn new(val: Greeter) -> Self {
+//!         GreeterHandle(actify::__private::spawn(val, run_greeter))
+//!     }
+//!
 //!     pub async fn say_hi(&self, name: String) -> String {
 //!         let (reply, get_result) = reply();
 //!         self.0.__call(GreeterCall::SayHi { name, reply }, get_result).await
 //!     }
 //! }
 //!
-//! # impl GreeterHandle {
-//! #     fn new(val: Greeter) -> Self { GreeterHandle(actify::__private::spawn(val)) }
-//! # }
 //! #[tokio::main]
 //! async fn main() {
 //!     let handle = GreeterHandle::new(Greeter {});
@@ -238,7 +239,7 @@
 //!
 //! # Spawning and the job channel
 //!
-//! [`Handle::builder`] returns the handle and the actor's future, so the
+//! A generated handle's `builder` returns the handle and the actor's future, so the
 //! caller chooses the executor. Nothing runs until that future is polled.
 //!
 //! ```
@@ -288,7 +289,7 @@
 //! [`Stream`] that is `Send`, `Sync`, `Unpin` and `'static`. A channel crate
 //! that provides neither can implement them directly.
 //!
-//! [`Handle::new`] is the Tokio spelling of a build followed by a
+//! A generated handle's `new` is the Tokio spelling of a build followed by a
 //! `tokio::spawn`, kept for the common case.
 //!
 //! [`Sink`]: https://docs.rs/futures-sink/latest/futures_sink/trait.Sink.html
@@ -296,11 +297,11 @@
 //!
 //! # Standard methods
 //!
-//! Every [`Handle`] provides a set of built-in methods that work without the macro:
+//! Every generated handle provides these, whatever methods its actor declares:
 //!
-//! - [`Handle::get`]: returns the actor's view, which for a plain `Clone` actor is a
+//! - `get`: returns the actor's view, which for a plain `Clone` actor is a
 //!   clone of the value itself
-//! - [`Handle::set`]: overwrites the actor value
+//! - `set`: overwrites the actor value
 //!
 //! Reading part of an actor without cloning all of it, or changing it in
 //! place, is what an `#[actify]` method is for. A handle takes no closures: a
@@ -379,7 +380,7 @@
 //!
 //! A [`ReadHandle`] is a read-only view of an actor. It supports
 //! [`get`](ReadHandle::get) but cannot mutate the actor. Obtain one via
-//! [`Handle::read_handle`].
+//! `read_handle` on the actor's own handle.
 //!
 //! # Handles for standard library types
 //!
@@ -396,7 +397,7 @@
 //! # Views and non-Clone types
 //!
 //! A handle exposes a view of its actor: the type `V` that [`Handle::get`]
-//! returns. By default `V = T`, so [`Handle::new`] requires `T: Clone` and the
+//! returns. By default `V = T`, so `new` requires `T: Clone` and the
 //! view is a clone of the value.
 //!
 //! For a non-Clone type, or to expose a summary instead of the whole value,
@@ -455,7 +456,7 @@
 //!
 //! # Actor lifetime and panics
 //!
-//! An actor runs until every [`Handle`] to it is dropped. A [`ReadHandle`]
+//! An actor runs until every handle to it is dropped. A [`ReadHandle`]
 //! holds a handle internally and keeps the actor alive.
 //!
 //! A panicking method stops the actor permanently. There is no restart, and
@@ -472,11 +473,11 @@
 //! Diagnostics are emitted through [`tracing`]. Every actor task runs inside
 //! an `actor` span at INFO level that names the instance: `actor_type` is
 //! the actor type, `actor_id` a process-wide spawn-order number, and
-//! `spawned_at` the [`Handle::new`] call site, captured through
+//! `spawned_at` the `new` call site, captured through
 //! `#[track_caller]`. Instrumentation in actor methods nests under the actor
 //! serving them. The span is created where the handle is created, which
 //! parents it to the span that is current there. A code path that reaches
-//! [`Handle::new`] through its own helper reports the helper's caller only
+//! `new` through its own helper reports the helper's caller only
 //! if that helper is also `#[track_caller]`.
 //!
 //! Every actor exit is reported with the reason as a field: at ERROR when a
@@ -513,7 +514,6 @@ mod message;
 
 // Reexport for easier reference
 pub use actify_macros::{actify, skip};
-pub use actor::Dispatch;
 pub use channel::{Closed, JobReceiver, JobSender};
 pub use extensions::{
     map::HashMapHandle, option::OptionHandle, set::HashSetHandle, string::StringHandle,
@@ -522,7 +522,7 @@ pub use extensions::{
 pub use handles::{
     DefaultChannel, DefaultReceiver, DefaultSender, Handle, HandleBuilder, ReadHandle, ToView,
 };
-pub use message::{Builtin, Job};
+pub use message::Builtin;
 
 /// The crate's own items that the [`actify`](macro@crate::actify) macro needs in
 /// generated code. Standard library types are named by absolute path instead.
@@ -531,8 +531,9 @@ pub use message::{Builtin, Job};
 /// only generated code names it.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::actor::{Actor, Reply, reply};
+    pub use crate::actor::{Actor, Reply, reply, serve};
     pub use crate::handles::builder;
     #[cfg(feature = "tokio")]
     pub use crate::handles::spawn;
+    pub use crate::message::run_builtin;
 }

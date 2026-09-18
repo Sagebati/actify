@@ -9,7 +9,9 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Ident;
 
-use super::call::{Carrier, call_type, carrier, declared_params, param_names, variant_ident};
+use super::call::{
+    Carrier, call_type, carrier, declared_params, param_names, run_ident, variant_ident,
+};
 
 /// The view parameter the generated handle declares.
 fn view() -> Ident {
@@ -95,12 +97,21 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         #(#attrs)*
         impl #bare_generics ::std::fmt::Debug for #handle_ty {
             fn fmt(&self, __actify_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                ::std::write!(
-                    __actify_f,
-                    "{}<{}>",
-                    #debug_name,
-                    ::std::any::type_name::<#impl_type>()
-                )
+                // The view is named only when it differs, so a log line says
+                // which of two handles on the same actor it came from.
+                let __actify_actor = ::std::any::type_name::<#impl_type>();
+                let __actify_view = ::std::any::type_name::<#view>();
+                if __actify_actor == __actify_view {
+                    ::std::write!(__actify_f, "{}<{}>", #debug_name, __actify_actor)
+                } else {
+                    ::std::write!(
+                        __actify_f,
+                        "{}<{}, {}>",
+                        #debug_name,
+                        __actify_actor,
+                        __actify_view
+                    )
+                }
             }
         }
 
@@ -158,6 +169,8 @@ fn constructors(info: &ImplInfo) -> TokenStream {
     let impl_type = &info.impl_type;
     let view = view();
 
+    let run = run_ident(info);
+
     // `Handle::new` exists only where actify can spawn, so this does too:
     // actify turns the macro's `tokio` feature on with its own.
     let new = cfg!(feature = "tokio").then(|| {
@@ -169,7 +182,7 @@ fn constructors(info: &ImplInfo) -> TokenStream {
             /// spawns the actor future instead.
             #[track_caller]
             pub fn new(__actify_val: #impl_type) -> Self {
-                #handle(::actify::__private::spawn(__actify_val))
+                #handle(::actify::__private::spawn(__actify_val, #run))
             }
         }
     });
@@ -200,6 +213,7 @@ fn builder_ident(info: &ImplInfo) -> Ident {
 /// place of the generic one.
 fn generate_builder(info: &ImplInfo) -> TokenStream {
     let attrs = &info.attributes;
+    let run = run_ident(info);
     let handle = &info.handle_trait_ident;
     let builder = builder_ident(info);
     let impl_type = &info.impl_type;
@@ -287,7 +301,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
                 #handle<#(#names,)* #view, ::actify::DefaultSender<#call_ty>>,
                 impl ::std::future::Future<Output = ()> + Send,
             ) {
-                let (__actify_handle, __actify_actor) = self.0.build();
+                let (__actify_handle, __actify_actor) = self.0.build(#run);
                 (#handle(__actify_handle), __actify_actor)
             }
         }
@@ -302,7 +316,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
                 #handle<#(#names,)* #view, __ActifyTx>,
                 impl ::std::future::Future<Output = ()> + Send,
             ) {
-                let (__actify_handle, __actify_actor) = self.0.build();
+                let (__actify_handle, __actify_actor) = self.0.build(#run);
                 (#handle(__actify_handle), __actify_actor)
             }
         }

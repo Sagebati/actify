@@ -4,11 +4,10 @@ use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use super::builder::HandleBuilder;
 use super::read_handle::ReadHandle;
 use crate::actor::reply;
 use crate::channel::JobSender;
-use crate::message::{Builtin, Job};
+use crate::message::Builtin;
 
 /// Panics because the actor is gone, whether it stopped or a method of it
 /// panicked. Which of the two it was is on the actor's own exit event, at
@@ -59,19 +58,18 @@ impl<T: Clone> ToView<T> for T {
     }
 }
 
-/// A clonable handle to an actor with no `#[actify]` block of its own, so the
-/// calls it carries are the built-in ones.
+/// The plumbing behind a generated handle: a shared sending half, and the
+/// calls every actor answers.
 ///
-/// Cloning it shares access to the same actor across tasks. For read-only
-/// access, see [`ReadHandle`]. An actor with an `#[actify]` block has a handle
-/// of its own, generated beside its message type, which carries its methods
-/// as well as these.
+/// `#[actify]` generates a handle of the actor's own that wraps this one, so a
+/// caller never names it. Cloning it shares access to the same actor across
+/// tasks.
 ///
 /// The second type parameter `V` is the view the handle exposes: what
 /// [`Handle::get`] returns. By default `V = T`, so a read is a clone of the
 /// actor itself. To expose a different type, implement [`ToView<V>`] and
 /// specify `V` explicitly (e.g. `Handle::<MyType, Summary>::new(val)`).
-pub struct Handle<T, V = T, M = Job<T, V>, S = DefaultSender<M>> {
+pub struct Handle<T, V, M, S = DefaultSender<M>> {
     // The `Arc` is what makes a handle one pointer wide and what stops the
     // actor: the last handle to drop drops the only sending half with it.
     sender: Arc<S>,
@@ -111,75 +109,6 @@ impl<T, V, M, S> Debug for Handle<T, V, M, S> {
     }
 }
 
-/// Spawns on Tokio, as [`Handle::new`] does.
-#[cfg(feature = "tokio")]
-impl<T: Default + Clone + Send + Sync + 'static> Default for Handle<T> {
-    #[track_caller]
-    fn default() -> Self {
-        Handle::new(T::default())
-    }
-}
-
-impl<T, V> Handle<T, V>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-{
-    /// Creates a new [`Handle`] and spawns its actor on Tokio.
-    ///
-    /// The Tokio spelling of [`Handle::builder`] followed by a
-    /// `tokio::spawn`, behind the default `tokio` feature. Turn that feature
-    /// off and the caller spawns the actor future itself, on any executor.
-    ///
-    /// For `Clone` types, `V` defaults to `T`: a read is a clone of the actor
-    /// itself and you can simply write `Handle::new(val)`.
-    ///
-    /// For non-Clone types (or to read a lightweight summary), implement
-    /// [`ToView<V>`] and specify `V` explicitly:
-    ///
-    /// ```
-    /// # use actify::{Handle, ToView};
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// #[derive(Clone, Debug, PartialEq)]
-    /// struct Size(usize);
-    ///
-    /// impl ToView<Size> for Vec<u8> {
-    ///     fn to_view(&self) -> Size { Size(self.len()) }
-    /// }
-    ///
-    /// let handle: Handle<Vec<u8>, Size> = Handle::new(vec![1, 2, 3]);
-    /// assert_eq!(handle.get().await, Size(3));
-    /// # }
-    /// ```
-    #[cfg(feature = "tokio")]
-    #[track_caller]
-    pub fn new(val: T) -> Handle<T, V> {
-        let (handle, actor) = Handle::builder(val).build();
-        tokio::spawn(actor);
-        handle
-    }
-
-    /// Starts building a [`Handle`] whose actor future the caller spawns.
-    ///
-    /// Where [`Handle::new`] spawns on Tokio, this hands the future back:
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let (handle, actor) = Handle::builder(0).build();
-    /// tokio::spawn(actor);
-    ///
-    /// assert_eq!(handle.get().await, 0);
-    /// # }
-    /// ```
-    #[track_caller]
-    pub fn builder(val: T) -> HandleBuilder<T, V> {
-        HandleBuilder::new(val)
-    }
-}
-
 impl<T, V, M, S> Handle<T, V, M, S>
 where
     T: ToView<V> + Send + Sync + 'static,
@@ -196,12 +125,15 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::Handle;
+    /// # use actify::actify;
+    /// # #[derive(Clone, Debug, PartialEq)]
+    /// # struct Counter(i32);
+    /// # #[actify]
+    /// # impl Counter {}
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(1);
-    /// let result = handle.get().await;
-    /// assert_eq!(result, 1);
+    /// let handle = CounterHandle::new(Counter(1));
+    /// assert_eq!(handle.get().await, Counter(1));
     /// # }
     /// ```
     ///
@@ -220,10 +152,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::Handle;
+    /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(None);
+    /// let handle = OptionHandle::new(None);
     /// handle.set(Some(1)).await;
     /// assert_eq!(handle.get().await, Some(1));
     /// # }
@@ -280,25 +212,34 @@ where
 mod tests {
     use super::*;
 
+    /// An actor with no methods of its own, so its handle carries the
+    /// built-in calls and nothing else. An empty `#[actify]` block is how an
+    /// actor asks for exactly that.
+    #[derive(Clone, Debug)]
+    struct Counter(i32);
+
+    #[actify_macros::actify]
+    impl Counter {}
+
     /// A built handle serves calls only once its actor future is spawned, and
     /// every call panics until then, so the two halves are useless apart.
     #[tokio::test]
     async fn test_a_built_actor_serves_once_the_caller_spawns_it() {
-        let (handle, actor) = Handle::builder(1).build();
+        let (handle, actor) = CounterHandle::builder(Counter(1)).build();
 
         let caller = handle.clone();
         let call = tokio::spawn(async move { caller.get().await });
 
         tokio::spawn(actor);
 
-        assert_eq!(call.await.unwrap(), 1);
+        assert_eq!(call.await.unwrap().0, 1);
     }
 
     /// Dropping the actor future is the same failure as an actor that stopped:
     /// nothing will ever serve the handle.
     #[tokio::test]
     async fn test_dropping_the_actor_future_leaves_a_dead_handle() {
-        let (handle, actor) = Handle::builder(1).build();
+        let (handle, actor) = CounterHandle::builder(Counter(1)).build();
         drop(actor);
 
         let result = tokio::spawn(async move { handle.get().await }).await;
@@ -310,7 +251,7 @@ mod tests {
     /// futures, so its size is paid on every copy.
     #[test]
     fn test_handle_is_pointer_sized() {
-        assert_eq!(size_of::<Handle<u8>>(), size_of::<usize>());
+        assert_eq!(size_of::<CounterHandle>(), size_of::<usize>());
     }
 
     /// A panicking actor method leaves the actor gone, which the next call
@@ -400,9 +341,9 @@ mod tests {
             .unwrap();
 
         let handle = actor_rt.block_on(async {
-            let handle = Handle::new(0i32);
-            handle.set(42).await;
-            assert_eq!(handle.get().await, 42); // The actor served jobs normally
+            let handle = CounterHandle::new(Counter(0));
+            handle.set(Counter(42)).await;
+            assert_eq!(handle.get().await.0, 42); // The actor served jobs normally
             handle
         });
 
@@ -415,7 +356,7 @@ mod tests {
 
         caller_rt.block_on(async {
             let orphaned = handle.clone();
-            let result = tokio::spawn(async move { orphaned.set(99).await }).await;
+            let result = tokio::spawn(async move { orphaned.set(Counter(99)).await }).await;
 
             let message = panic_message(result.unwrap_err());
             assert!(
@@ -656,20 +597,23 @@ mod tests {
         }
     }
 
-    /// `Handle<BigState, usize>` and `Handle<BigState>` used to print the same
-    /// thing, so the view a handle exposes was invisible in a log line.
+    /// Two handles on the same actor that expose different views used to
+    /// print the same thing, so the view was invisible in a log line.
     #[tokio::test]
     async fn test_debug_names_the_view_only_when_it_differs() {
-        let plain: Handle<i32> = Handle::new(1);
-        assert_eq!(format!("{plain:?}"), "Handle<i32>");
+        let plain = CounterHandle::new(Counter(1));
+        assert_eq!(
+            format!("{plain:?}"),
+            format!("CounterHandle<{}>", type_name::<Counter>())
+        );
 
-        let viewed: Handle<BigState, usize> = Handle::new(BigState {
+        let viewed = BigStateHandle::<usize>::new(BigState {
             data: vec![1],
             count: 1,
         });
         assert_eq!(
             format!("{viewed:?}"),
-            format!("Handle<{}, usize>", type_name::<BigState>())
+            format!("BigStateHandle<{}, usize>", type_name::<BigState>())
         );
     }
 

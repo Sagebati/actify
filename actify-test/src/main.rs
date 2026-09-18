@@ -54,6 +54,14 @@ impl SomeStruct {
     }
 }
 
+/// An actor with no methods of its own: an empty `#[actify]` block gives it a
+/// handle carrying the built-in calls and nothing else.
+#[derive(Clone, Debug, PartialEq)]
+struct Plain(i32);
+
+#[actify]
+impl Plain {}
+
 #[allow(dead_code)]
 /// Example Extension trait
 trait TestExt<T> {
@@ -434,7 +442,7 @@ impl UnqualifiedInstrumentActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actify::{Handle, VecHandle};
+    use actify::VecHandle;
     use std::sync::Mutex;
     use std::time::Duration;
     use tokio::time::{Instant, sleep};
@@ -606,16 +614,30 @@ mod tests {
         assert_eq!(stored, "x-[1, 2]-3-true");
     }
 
+    /// An empty `#[actify]` block is how an actor asks for a handle carrying
+    /// the built-in calls and nothing else, which is the only way to make an
+    /// actor out of a type with no methods worth exposing.
+    #[tokio::test]
+    async fn test_an_empty_block_gives_a_handle_with_the_built_in_calls() {
+        let handle = PlainHandle::new(Plain(1));
+
+        assert_eq!(handle.get().await, Plain(1));
+
+        handle.set(Plain(2)).await;
+        assert_eq!(handle.get().await, Plain(2));
+        assert_eq!(handle.read_handle().get().await, Plain(2));
+    }
+
     /// An actor stops once the last handle to it goes out of scope, while one
     /// whose handle was cloned out of that scope keeps running.
     #[tokio::test]
     async fn test_handle_out_of_scope() {
         let baseline = alive_tasks();
-        let handle_1 = Handle::new(1);
+        let handle_1 = PlainHandle::new(Plain(1));
 
         {
-            let _handle_2 = Handle::new("test");
-            let _handle_3 = Handle::new(1.); // These go out of scope
+            let _handle_2 = PlainHandle::new(Plain(2));
+            let _handle_3 = PlainHandle::new(Plain(3)); // These go out of scope
             let _handle_1_clone = handle_1.clone();
         }
 
@@ -751,7 +773,7 @@ mod tests {
     async fn test_handle_task_cleanup() {
         let baseline = alive_tasks();
 
-        let handle = Handle::new(42);
+        let handle = PlainHandle::new(Plain(42));
 
         let with_handle = await_alive_tasks(baseline + 1).await;
         assert!(
@@ -775,7 +797,7 @@ mod tests {
     async fn test_handle_clone_task_cleanup() {
         let baseline = alive_tasks();
 
-        let handle = Handle::new(42);
+        let handle = PlainHandle::new(Plain(42));
         let handle_clone = handle.clone();
 
         let with_handles = await_alive_tasks(baseline + 1).await;
@@ -812,9 +834,9 @@ mod tests {
     async fn test_multiple_handles_task_cleanup() {
         let baseline = alive_tasks();
 
-        let handle1 = Handle::new(1);
-        let handle2 = Handle::new("test");
-        let handle3 = Handle::new(1.5f64);
+        let handle1 = PlainHandle::new(Plain(1));
+        let handle2 = PlainHandle::new(Plain(2));
+        let handle3 = PlainHandle::new(Plain(3));
 
         let with_handles = await_alive_tasks(baseline + 3).await;
         assert_eq!(
@@ -840,7 +862,7 @@ mod tests {
     async fn test_read_handle_keeps_actor_alive() {
         let baseline = alive_tasks();
 
-        let handle = Handle::new(1);
+        let handle = PlainHandle::new(Plain(1));
         let read_handle = handle.read_handle();
 
         let with_handle = await_alive_tasks(baseline + 1).await;
@@ -855,7 +877,7 @@ mod tests {
             "The actor should stay alive while a ReadHandle exists"
         );
 
-        assert_eq!(read_handle.get().await, 1);
+        assert_eq!(read_handle.get().await, Plain(1));
 
         drop(read_handle);
 

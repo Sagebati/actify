@@ -142,12 +142,22 @@ pub fn declared_params(info: &ImplInfo) -> Vec<TokenStream> {
         .collect()
 }
 
-/// Generates the message enum, the glue that lets it carry a builtin, the
-/// implementation that runs it, and a `Debug` that names variants without
-/// asking anything of their fields.
+/// The name of the generated loop, e.g. `__actify_run_greeter_call`.
+pub fn run_ident(info: &ImplInfo) -> Ident {
+    let call = &info.call_enum_ident;
+    Ident::new(
+        &format!("__actify_run_{}", call.to_string().to_lowercase()),
+        call.span(),
+    )
+}
+
+/// Generates the message enum, the glue that lets it carry a builtin, a
+/// `Debug` that names variants without asking anything of their fields, and
+/// the loop that serves the actor.
 pub fn generate(info: &ImplInfo) -> TokenStream {
     let attrs = &info.attributes;
     let call = &info.call_enum_ident;
+    let run_ident = run_ident(info);
     let impl_type = &info.impl_type;
     let view = view_param();
 
@@ -162,15 +172,20 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     with_view.params.push(syn::parse_quote!(#view));
     let (impl_generics, _, _) = with_view.split_for_impl();
 
-    let mut dispatch_generics = info.generics.clone();
-    dispatch_generics
+    // The loop is a free function rather than a method, so nothing the actor
+    // type declares has to be a trait implementation.
+    let mut run_generics = info.generics.clone();
+    run_generics
         .params
         .push(syn::parse_quote!(#view: Send + 'static));
-    dispatch_generics
+    run_generics
+        .params
+        .push(syn::parse_quote!(__ActifyRx: ::actify::JobReceiver<#call_ty>));
+    run_generics
         .make_where_clause()
         .predicates
-        .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view>));
-    let (dispatch_impl_generics, _, dispatch_where) = dispatch_generics.split_for_impl();
+        .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
+    let (run_generics_impl, _, run_where) = run_generics.split_for_impl();
 
     let variants = info.methods.iter().map(|method| {
         let variant = variant_ident(method);
@@ -271,16 +286,19 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         #(#attrs)*
         // A deprecated method still has to run when it is called, and the call
         // is the macro's, not the caller's: the warning belongs at their call
-        // site, which the trait signature carries it to.
+        // site, which the handle's method carries it to.
         #[allow(deprecated)]
-        impl #dispatch_impl_generics ::actify::Dispatch<#impl_type> for #call_ty #dispatch_where {
-            async fn dispatch(
-                self,
-                __actify_actor: &mut ::actify::__private::Actor<#impl_type>,
-            ) {
-                match self {
+        #[doc(hidden)]
+        pub async fn #run_ident #run_generics_impl(
+            mut __actify_rx: __ActifyRx,
+            mut __actify_actor: ::actify::__private::Actor<#impl_type>,
+        ) #run_where {
+            while let Some(__actify_call) =
+                ::actify::JobReceiver::recv(&mut __actify_rx).await
+            {
+                match __actify_call {
                     #call::__ActifyBuiltin(__actify_builtin) => {
-                        ::actify::Dispatch::dispatch(__actify_builtin, __actify_actor).await
+                        ::actify::__private::run_builtin(&mut __actify_actor, __actify_builtin)
                     }
                     #(#arms)*
                 }

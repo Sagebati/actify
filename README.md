@@ -82,7 +82,7 @@ and the crate behind it are yours to pick. Anything that is a `Sink` and a
 ```rust,ignore
 let (tx, rx) = flume::unbounded();
 
-let (handle, actor) = Handle::builder(Greeter {})
+let (handle, actor) = GreeterHandle::builder(Greeter {})
     .channel((tx.into_sink(), rx.into_stream()))
     .build();
 

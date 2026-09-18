@@ -6,9 +6,7 @@ use super::handle::{Handle, ToView};
 /// A clonable read-only handle that can only be used to read the internal value.
 ///
 /// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`].
-pub struct ReadHandle<T, V = T, M = crate::message::Job<T, V>, S = crate::handles::DefaultSender<M>>(
-    Handle<T, V, M, S>,
-);
+pub struct ReadHandle<T, V, M, S = crate::handles::DefaultSender<M>>(Handle<T, V, M, S>);
 
 impl<T, V, M, S> Clone for ReadHandle<T, V, M, S> {
     fn clone(&self) -> Self {
@@ -46,13 +44,17 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::Handle;
+    /// # use actify::actify;
+    /// # #[derive(Clone, Debug, PartialEq)]
+    /// # struct Counter(i32);
+    /// # #[actify]
+    /// # impl Counter {}
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(1);
+    /// let handle = CounterHandle::new(Counter(1));
     /// let read_handle = handle.read_handle();
     /// let result = read_handle.get().await;
-    /// assert_eq!(result, 1);
+    /// assert_eq!(result, Counter(1));
     /// # }
     /// ```
     ///
@@ -69,24 +71,19 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actify_macros::actify;
 
-    #[test]
-    fn test_read_handle_is_pointer_sized() {
-        assert_eq!(size_of::<ReadHandle<u8>>(), size_of::<usize>());
-    }
+    #[derive(Clone, Debug)]
+    struct Counter(i32);
 
-    #[tokio::test]
-    async fn test_read_handle() {
-        let handle = Handle::new(1);
-        let read_handle = handle.read_handle();
-        assert_eq!(read_handle.get().await, 1);
-
-        handle.set(2).await;
-        assert_eq!(read_handle.get().await, 2);
-    }
+    #[actify]
+    impl Counter {}
 
     #[derive(Clone, Debug)]
     struct Counted(Vec<u8>);
+
+    #[actify]
+    impl Counted {}
 
     impl crate::ToView<usize> for Counted {
         fn to_view(&self) -> usize {
@@ -94,12 +91,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_read_handle_is_pointer_sized() {
+        assert_eq!(
+            size_of::<ReadHandle<Counter, Counter, CounterCall>>(),
+            size_of::<usize>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_handle() {
+        let handle = CounterHandle::new(Counter(1));
+        let read_handle = handle.read_handle();
+        assert_eq!(read_handle.get().await.0, 1);
+
+        handle.set(Counter(2)).await;
+        assert_eq!(read_handle.get().await.0, 2);
+    }
+
     #[tokio::test]
     async fn test_debug_names_the_view_only_when_it_differs() {
-        let plain: Handle<i32> = Handle::new(1);
-        assert_eq!(format!("{:?}", plain.read_handle()), "ReadHandle<i32>");
+        let plain = CounterHandle::new(Counter(1));
+        assert_eq!(
+            format!("{:?}", plain.read_handle()),
+            format!("ReadHandle<{}>", type_name::<Counter>())
+        );
 
-        let viewed: Handle<Counted, usize> = Handle::new(Counted(vec![1, 2]));
+        let viewed = CountedHandle::<usize>::new(Counted(vec![1, 2]));
         assert_eq!(
             format!("{:?}", viewed.read_handle()),
             format!("ReadHandle<{}, usize>", type_name::<Counted>())

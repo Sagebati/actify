@@ -4,8 +4,6 @@ use std::fmt::{self, Debug};
 use std::future::Future;
 use tracing::Instrument;
 
-use crate::channel::JobReceiver;
-
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -63,16 +61,6 @@ impl<R> Debug for Reply<R> {
 pub fn reply<R>() -> (Reply<R>, oneshot::Receiver<R>) {
     let (respond_to, get_result) = oneshot::channel();
     (Reply(respond_to), get_result)
-}
-
-/// How one queued call runs against the actor that owns the state.
-///
-/// Implemented by [`Job`](crate::Job), and by the message type a caller
-/// supplies in its place. It is monomorphised, so dispatching a call is a
-/// direct call and not a jump through a vtable.
-pub trait Dispatch<T>: Sized + Send + 'static {
-    /// Runs this call on the actor, answering its caller before returning.
-    fn dispatch(self, actor: &mut Actor<T>) -> impl Future<Output = ()> + Send;
 }
 
 impl<T> Actor<T> {
@@ -139,41 +127,54 @@ impl Drop for ExitGuard {
     }
 }
 
-/// Serves jobs inside an `actor` span that names the instance: the actor
-/// type, its spawn-order id and the call site it was spawned from, so that
-/// instrumentation in actor methods nests under the actor task.
+/// Wraps an actor's loop in the `actor` span that names the instance, and in
+/// the guard that reports why it stopped.
+///
+/// The span names the actor type, its spawn-order id and the call site it was
+/// spawned from, so that instrumentation in actor methods nests under the
+/// actor task.
 ///
 /// The span is created before the future is spawned, which parents it to
 /// whatever span is current where the handle is created. This is why it is a
 /// manual wrapper rather than `#[tracing::instrument]`: on an async fn the
 /// attribute creates its span at first poll, inside the spawned task, where
 /// the creation context is gone.
-pub(crate) fn serve<T, M, R>(rx: R, actor: Actor<T>) -> impl Future<Output = ()> + Send
+/// `run` is the loop itself, which generated code supplies: it takes the
+/// receiver and the actor by value, so its future borrows nothing from here
+/// and needs neither a trait to name it nor a box to hold it.
+#[doc(hidden)]
+pub fn serve<T, R, F, Fut>(rx: R, actor: Actor<T>, run: F) -> impl Future<Output = ()> + Send
 where
     T: Send + Sync + 'static,
-    M: Dispatch<T>,
-    R: JobReceiver<M>,
+    R: Send + 'static,
+    F: FnOnce(R, Actor<T>) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send,
 {
-    let span = tracing::info_span!(
-        "actor",
-        actor_type = type_name::<T>(),
-        actor_id = actor.id,
-        spawned_at = %actor.spawned_at,
-    );
-    run(rx, actor).instrument(span)
+    let span = actor.span();
+    let guard = actor.exit_guard();
+    async move {
+        let _guard = guard;
+        run(rx, actor).await
+    }
+    .instrument(span)
 }
 
-async fn run<T, M, R>(mut rx: R, mut actor: Actor<T>)
-where
-    T: Send + Sync + 'static,
-    M: Dispatch<T>,
-    R: JobReceiver<M>,
-{
-    let _guard = ExitGuard {
-        actor_type: type_name::<T>(),
-        actor_id: actor.id,
-    };
-    while let Some(job) = rx.recv().await {
-        job.dispatch(&mut actor).await;
+impl<T: Send + Sync + 'static> Actor<T> {
+    /// The span every call on this actor runs inside.
+    fn span(&self) -> tracing::Span {
+        tracing::info_span!(
+            "actor",
+            actor_type = type_name::<T>(),
+            actor_id = self.id,
+            spawned_at = %self.spawned_at,
+        )
+    }
+
+    /// Reports why the actor stopped, whenever the loop's future is dropped.
+    fn exit_guard(&self) -> ExitGuard {
+        ExitGuard {
+            actor_type: type_name::<T>(),
+            actor_id: self.id,
+        }
     }
 }
