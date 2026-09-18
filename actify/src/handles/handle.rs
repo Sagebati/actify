@@ -1,9 +1,9 @@
+use futures_channel::oneshot;
 use std::any::Any;
 use std::any::type_name;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tokio::sync::oneshot;
 
 use super::builder::HandleBuilder;
 use super::read_handle::ReadHandle;
@@ -109,6 +109,8 @@ impl<T, V, S> Debug for Handle<T, V, S> {
     }
 }
 
+/// Spawns on Tokio, as [`Handle::new`] does.
+#[cfg(feature = "tokio")]
 impl<T: Default + Clone + Send + Sync + 'static> Default for Handle<T> {
     #[track_caller]
     fn default() -> Self {
@@ -121,7 +123,12 @@ where
     T: ToView<V> + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Creates a new [`Handle`] and spawns the corresponding [`Actor`].
+    /// Creates a new [`Handle`] and spawns the corresponding [`Actor`] on
+    /// Tokio.
+    ///
+    /// The Tokio spelling of [`Handle::builder`] followed by a
+    /// `tokio::spawn`, behind the default `tokio` feature. Turn that feature
+    /// off and the caller spawns the actor future itself, on any executor.
     ///
     /// For `Clone` types, `V` defaults to `T`: a read is a clone of the actor
     /// itself and you can simply write `Handle::new(val)`.
@@ -144,6 +151,7 @@ where
     /// assert_eq!(handle.get().await, Size(3));
     /// # }
     /// ```
+    #[cfg(feature = "tokio")]
     #[track_caller]
     pub fn new(val: T) -> Handle<T, V> {
         let (handle, actor) = Handle::builder(val).build();

@@ -8,6 +8,7 @@ pushing:
 ```sh
 cargo test --workspace
 cargo test -p actify                                                  # default features
+cargo check -p actify --no-default-features                           # no runtime
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps

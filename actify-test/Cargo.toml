@@ -16,8 +16,10 @@ tracing = { workspace = true, features = ["std", "attributes"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 trybuild.workspace = true
 # trybuild builds the compile-fail cases in a generated crate that takes its
-# tokio features from this section, not from [dependencies].
-tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+# tokio features from this section, not from [dependencies]. `macros` is what
+# `#[tokio::main]` in those cases needs; actify no longer enables it, since its
+# own dependency on tokio is optional.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 flume = { version = "0.12.0", default-features = false, features = ["async"] }
 tokio-util = "0.7.19"
 tokio-stream = "0.1.19"

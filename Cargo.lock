@@ -9,6 +9,7 @@ dependencies = [
  "actify-macros",
  "futures-channel",
  "futures-core",
+ "futures-executor",
  "futures-sink",
  "tokio",
  "tracing",

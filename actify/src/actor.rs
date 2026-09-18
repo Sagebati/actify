@@ -1,8 +1,8 @@
+use futures_channel::oneshot;
 use std::any::{Any, type_name};
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::pin::Pin;
-use tokio::sync::oneshot;
 use tracing::Instrument;
 
 use crate::channel::JobReceiver;

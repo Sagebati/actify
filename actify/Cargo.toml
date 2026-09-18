@@ -12,7 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+tokio = { workspace = true, features = ["rt"], optional = true }
 futures-core = { workspace = true, features = ["std"] }
 futures-sink = { workspace = true, features = ["std"] }
 futures-channel = { workspace = true, features = ["std", "sink"] }
@@ -20,9 +20,13 @@ tracing = { workspace = true, features = ["std"] }
 actify-macros.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+futures-executor = "0.3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [features]
-default = []
+default = ["tokio"]
+# `Handle::new`, which builds an actor and spawns it on Tokio in one call.
+# Without it the caller spawns the actor future itself, on any executor.
+tokio = ["dep:tokio"]
 # Emits the events as log records whenever no tracing subscriber is set.
 log = ["tracing/log"]
