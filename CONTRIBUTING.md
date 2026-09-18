@@ -8,15 +8,16 @@ pushing:
 ```sh
 cargo test --workspace
 cargo test -p actify                                                  # default features
+cargo check -p actify --no-default-features                           # no runtime
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 ```
 
-Workspace feature unification builds actify with the `profiler` feature whenever
-`actify-test` is in the graph, so `cargo test -p actify` is the only run that
-covers the default build.
+Dev-dependencies add tokio features that the library's own manifest does not
+declare, so `cargo check -p actify` is the only run that proves the declared
+features compile the library.
 
 Documentation is checked twice because feature-gated items cannot be linked from
 text that is always compiled.

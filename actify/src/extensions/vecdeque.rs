@@ -1,5 +1,5 @@
 use actify_macros::actify;
-use core::ops::RangeBounds;
+use core::ops::{Bound, RangeBounds};
 use std::collections::VecDeque;
 
 /// An extension trait for `VecDeque<T>` actors, made available on the [`Handle`](crate::Handle)
@@ -29,13 +29,10 @@ trait ActorVecDeque<T> {
     where
         T: PartialEq;
 
-    fn drain<R>(&mut self, range: R) -> Vec<T>
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static;
-
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&T) -> bool + Send + Sync + 'static;
+    /// Takes the range as a pair of bounds, which is what a call can carry.
+    /// The handle's own `drain` takes any range and lowers it to this.
+    #[doc(hidden)]
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T>;
 
     fn insert(&mut self, index: usize, value: T);
 
@@ -49,14 +46,10 @@ trait ActorVecDeque<T> {
 
     fn split_off(&mut self, at: usize) -> VecDeque<T>;
 
-    fn retain_mut<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut T) -> bool + Send + Sync + 'static;
-
     fn resize(&mut self, new_len: usize, value: T);
 }
 
-/// Extension methods for `Handle<VecDeque<T>>`, exposed as [`VecDequeHandle`](crate::VecDequeHandle).
+/// Methods on [`VecDequeHandle`](crate::VecDequeHandle), for an actor holding a `VecDeque<T>>`, exposed as [`VecDequeHandle`](crate::VecDequeHandle).
 #[actify]
 impl<T> ActorVecDeque<T> for VecDeque<T>
 where
@@ -67,11 +60,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::new());
+    /// let handle = VecDequeHandle::new(VecDeque::new());
     /// handle.push_back(1).await;
     /// handle.push_back(2).await;
     /// assert_eq!(handle.get().await, VecDeque::from([1, 2]));
@@ -86,11 +79,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::new());
+    /// let handle = VecDequeHandle::new(VecDeque::new());
     /// handle.push_front(1).await;
     /// handle.push_front(2).await;
     /// assert_eq!(handle.get().await, VecDeque::from([2, 1]));
@@ -105,11 +98,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.pop_back().await, Some(3));
     /// # }
     /// ```
@@ -122,11 +115,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.pop_front().await, Some(1));
     /// # }
     /// ```
@@ -139,11 +132,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.len().await, 3);
     /// # }
     /// ```
@@ -156,11 +149,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::<i32>::new());
+    /// let handle = VecDequeHandle::new(VecDeque::<i32>::new());
     /// assert!(handle.is_empty().await);
     /// # }
     /// ```
@@ -173,11 +166,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// handle.clear().await;
     /// assert!(handle.is_empty().await);
     /// # }
@@ -192,11 +185,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([10, 20, 30]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([10, 20, 30]));
     /// assert_eq!(handle.get_index(1).await, Some(20));
     /// assert_eq!(handle.get_index(5).await, None);
     /// # }
@@ -210,11 +203,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([10, 20, 30]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([10, 20, 30]));
     /// assert_eq!(handle.front().await, Some(10));
     /// # }
     /// ```
@@ -227,11 +220,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([10, 20, 30]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([10, 20, 30]));
     /// assert_eq!(handle.back().await, Some(30));
     /// # }
     /// ```
@@ -244,11 +237,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert!(handle.contains(2).await);
     /// assert!(!handle.contains(5).await);
     /// # }
@@ -270,42 +263,18 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3, 4]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3, 4]));
     /// let drained = handle.drain(1..3).await;
     /// assert_eq!(drained, vec![2, 3]);
     /// assert_eq!(handle.get().await, VecDeque::from([1, 4]));
     /// # }
     /// ```
-    fn drain<R>(&mut self, range: R) -> Vec<T>
-    where
-        R: RangeBounds<usize> + Send + Sync + 'static,
-    {
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T> {
         self.drain(range).collect()
-    }
-
-    /// Retains only the elements specified by the predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::{Handle, VecDequeHandle};
-    /// # use std::collections::VecDeque;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3, 4, 5]));
-    /// handle.retain(|x| *x > 2).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([3, 4, 5]));
-    /// # }
-    /// ```
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&T) -> bool + Send + Sync + 'static,
-    {
-        self.retain(f)
     }
 
     /// Inserts an element at `index`, shifting every later element towards the back.
@@ -317,11 +286,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 3]));
     /// handle.insert(1, 2).await;
     /// assert_eq!(handle.get().await, VecDeque::from([1, 2, 3]));
     /// # }
@@ -336,11 +305,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.remove(1).await, Some(2));
     /// assert_eq!(handle.remove(9).await, None);
     /// assert_eq!(handle.get().await, VecDeque::from([1, 3]));
@@ -359,11 +328,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// handle.swap(0, 2).await;
     /// assert_eq!(handle.get().await, VecDeque::from([3, 2, 1]));
     /// # }
@@ -377,11 +346,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// handle.truncate(1).await;
     /// assert_eq!(handle.get().await, VecDeque::from([1]));
     /// # }
@@ -395,11 +364,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2]));
     /// handle.extend(VecDeque::from([3, 4])).await;
     /// assert_eq!(handle.get().await, VecDeque::from([1, 2, 3, 4]));
     /// # }
@@ -418,11 +387,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.split_off(1).await, VecDeque::from([2, 3]));
     /// assert_eq!(handle.get().await, VecDeque::from([1]));
     /// # }
@@ -431,39 +400,17 @@ where
         self.split_off(at)
     }
 
-    /// Keeps only the elements the predicate accepts, and lets it change the ones
-    /// it keeps.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::{Handle, VecDequeHandle};
-    /// # use std::collections::VecDeque;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2, 3, 4]));
-    /// handle.retain_mut(|x| { *x *= 10; *x > 20 }).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([30, 40]));
-    /// # }
-    /// ```
-    fn retain_mut<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut T) -> bool + Send + Sync + 'static,
-    {
-        self.retain_mut(f)
-    }
-
     /// Resizes the deque to the given length, dropping the surplus or filling
     /// the shortfall with clones of `value`.
     ///
     /// # Examples
     ///
     /// ```
-    /// # use actify::{Handle, VecDequeHandle};
+    /// # use actify::VecDequeHandle;
     /// # use std::collections::VecDeque;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = Handle::new(VecDeque::from([1, 2]));
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2]));
     /// handle.resize(4, 9).await;
     /// assert_eq!(handle.get().await, VecDeque::from([1, 2, 9, 9]));
     /// handle.resize(1, 0).await;
@@ -475,13 +422,48 @@ where
     }
 }
 
+/// The range methods, written by hand so that a caller can still pass any
+/// range while the call itself carries a concrete pair of bounds.
+impl<T, V, S> VecDequeHandle<T, V, S>
+where
+    T: Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: actify::JobSender<VecDequeCall<T, V>>,
+    VecDeque<T>: actify::ToView<V> + Send + Sync + 'static,
+{
+    /// Removes the range from the deque and returns what it held.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::VecDequeHandle;
+    /// # use std::collections::VecDeque;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
+    /// assert_eq!(handle.drain(1..).await, vec![2, 3]);
+    /// assert_eq!(handle.get().await, VecDeque::from([1]));
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the actor has stopped.
+    pub async fn drain<R>(&self, range: R) -> Vec<T>
+    where
+        R: RangeBounds<usize>,
+    {
+        self.drain_bounds((range.start_bound().cloned(), range.end_bound().cloned()))
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Handle;
 
-    fn deque() -> Handle<VecDeque<i32>> {
-        Handle::new(VecDeque::from([1, 2, 3]))
+    fn deque() -> VecDequeHandle<i32> {
+        VecDequeHandle::new(VecDeque::from([1, 2, 3]))
     }
 
     #[tokio::test]
@@ -516,17 +498,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_drain_and_retain_remove_in_place() {
-        let handle = Handle::new(VecDeque::from([1, 2, 3, 4, 5]));
-
-        assert_eq!(handle.drain(1..3).await, vec![2, 3]);
-        assert_eq!(handle.get().await, VecDeque::from([1, 4, 5]));
-
-        handle.retain(|value: &i32| value % 2 == 1).await;
-        assert_eq!(handle.get().await, VecDeque::from([1, 5]));
-    }
-
-    #[tokio::test]
     async fn test_positions_move_the_right_element() {
         let handle = deque();
 
@@ -540,6 +511,14 @@ mod tests {
         assert_eq!(handle.get().await, VecDeque::from([9, 1, 3]));
 
         assert_eq!(handle.remove(9).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_drain_removes_a_range_in_place() {
+        let handle = deque();
+
+        assert_eq!(handle.drain(1..3).await, vec![2, 3]);
+        assert_eq!(handle.get().await, VecDeque::from([1]));
     }
 
     #[tokio::test]
@@ -565,18 +544,5 @@ mod tests {
 
         handle.resize(2, 0).await;
         assert_eq!(handle.get().await, VecDeque::from([1, 2]));
-    }
-
-    #[tokio::test]
-    async fn test_retain_mut_can_change_what_it_keeps() {
-        let handle = Handle::new(VecDeque::from([1, 2, 3, 4]));
-
-        handle
-            .retain_mut(|x: &mut i32| {
-                *x *= 10;
-                *x > 20
-            })
-            .await;
-        assert_eq!(handle.get().await, VecDeque::from([30, 40]));
     }
 }

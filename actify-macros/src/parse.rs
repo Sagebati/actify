@@ -17,8 +17,10 @@ fn accumulate(errors: &mut Option<Error>, error: Error) {
 pub struct ImplInfo {
     /// The full impl type, e.g. `TestStruct<T>`.
     pub impl_type: Box<Type>,
-    /// Generated handle trait name, e.g. `TestStructHandle`.
+    /// Generated handle name, e.g. `TestStructHandle`.
     pub handle_trait_ident: Ident,
+    /// Generated message enum name, e.g. `TestStructCall`.
+    pub call_enum_ident: Ident,
     /// Impl-level generics (where clause guaranteed present via `make_where_clause`).
     pub generics: Generics,
     /// If this is a trait impl, the trait path (e.g. `ActorVec<T>`).
@@ -36,7 +38,6 @@ impl ImplInfo {
     /// Mutates the impl block to ensure a where clause exists.
     pub fn from_impl_block(
         impl_block: &mut ItemImpl,
-        skip_all_broadcasts: bool,
         custom_name: Option<syn::LitStr>,
     ) -> syn::Result<ImplInfo> {
         let type_ident = get_impl_type_ident(&impl_block.self_ty)?;
@@ -44,17 +45,25 @@ impl ImplInfo {
         // Ensure the where clause always exists so we can unwrap safely
         impl_block.generics.make_where_clause();
 
-        let handle_trait_ident = if let Some(lit) = custom_name {
-            let name = lit.value();
-            syn::parse_str::<Ident>(&name).map_err(|_| {
-                Error::new_spanned(
-                    &lit,
-                    "invalid `name` value: must be a valid Rust identifier",
-                )
-            })?
-        } else {
-            Ident::new(&format!("{type_ident}Handle"), Span::call_site())
+        // A custom name replaces the type's own in both generated names, so
+        // that the handle and the message it sends stay a matching pair.
+        let stem = match custom_name {
+            Some(lit) => {
+                let name = lit.value();
+                syn::parse_str::<Ident>(&name).map_err(|_| {
+                    Error::new_spanned(
+                        &lit,
+                        "invalid `name` value: must be a valid Rust identifier",
+                    )
+                })?
+            }
+            None => Ident::new(&format!("{type_ident}Handle"), Span::call_site()),
         };
+        let handle_trait_ident = stem.clone();
+        let call_enum_ident = Ident::new(
+            &format!("{}Call", stem.to_string().trim_end_matches("Handle")),
+            Span::call_site(),
+        );
 
         let trait_path = impl_block.trait_.as_ref().map(|(_, path, _)| path.clone());
 
@@ -71,13 +80,10 @@ impl ImplInfo {
             // Skipped methods are not parsed at all, so a signature that no
             // actor call could express is allowed to stay in the block.
             if find_marker_attribute(&method.attrs, "skip").is_some() {
-                if let Some(error) = broadcast_attributes_on_skipped(method) {
-                    accumulate(&mut errors, error);
-                }
                 continue;
             }
 
-            match MethodInfo::from_impl_method(method, skip_all_broadcasts) {
+            match MethodInfo::from_impl_method(method) {
                 Ok(info) => methods.push(info),
                 Err(error) => accumulate(&mut errors, error),
             }
@@ -90,6 +96,7 @@ impl ImplInfo {
         Ok(ImplInfo {
             impl_type: impl_block.self_ty.clone(),
             handle_trait_ident,
+            call_enum_ident,
             generics: impl_block.generics.clone(),
             trait_path,
             attributes,
@@ -97,25 +104,6 @@ impl ImplInfo {
             original_impl: impl_block.clone(),
         })
     }
-}
-
-/// Report `#[broadcast]` and `#[skip_broadcast]` on a skipped method.
-///
-/// Both decide whether a generated method broadcasts, and a skipped method has
-/// none, so either is a mistake worth naming rather than ignoring.
-fn broadcast_attributes_on_skipped(method: &ImplItemFn) -> Option<Error> {
-    let mut errors = None;
-
-    for name in ["broadcast", "skip_broadcast"] {
-        let Some(attr) = find_marker_attribute(&method.attrs, name) else {
-            continue;
-        };
-        let message =
-            format!("#[{name}] is superfluous: #[skip] leaves this method off the handle entirely");
-        accumulate(&mut errors, Error::new(attr.span(), message));
-    }
-
-    errors
 }
 
 /// Intermediate representation for a single method within the impl block.
@@ -126,8 +114,6 @@ pub struct MethodInfo {
     pub is_mutable: bool,
     /// Whether the method is async.
     pub is_async: bool,
-    /// Whether the generated method broadcasts after calling the actor method.
-    pub broadcasts: bool,
     /// Argument identifiers. For destructuring patterns a positional name is generated.
     pub arg_names: Punctuated<Ident, Comma>,
     /// Argument types.
@@ -142,7 +128,7 @@ pub struct MethodInfo {
 
 impl MethodInfo {
     /// Parse a single `ImplItemFn` into its intermediate representation.
-    fn from_impl_method(method: &ImplItemFn, skip_all_broadcasts: bool) -> syn::Result<MethodInfo> {
+    fn from_impl_method(method: &ImplItemFn) -> syn::Result<MethodInfo> {
         let ident = method.sig.ident.clone();
 
         let is_mutable = method.sig.inputs.iter().any(|arg| {
@@ -156,50 +142,13 @@ impl MethodInfo {
         });
         let is_async = method.sig.asyncness.is_some();
 
-        let skip_attr = find_marker_attribute(&method.attrs, "skip_broadcast");
-        let broadcast_attr = find_marker_attribute(&method.attrs, "broadcast");
-
         let mut errors = None;
 
-        // A `&self` method cannot change the state, so it only broadcasts when
-        // asked to. Interior mutability and a custom `to_view` are the
-        // cases where that is meaningful.
-        let broadcasts = if skip_all_broadcasts {
-            if let Some(attr) = skip_attr {
-                accumulate(
-                    &mut errors,
-                    Error::new(
-                        attr.span(),
-                        "#[skip_broadcast] is superfluous: the impl block already skips all broadcasts via #[actify(skip_broadcast)]",
-                    ),
-                );
-            }
-            broadcast_attr.is_some()
-        } else if is_mutable {
-            if let Some(attr) = broadcast_attr {
-                accumulate(
-                    &mut errors,
-                    Error::new(
-                        attr.span(),
-                        "#[broadcast] is superfluous: methods taking &mut self broadcast by default",
-                    ),
-                );
-            }
-            skip_attr.is_none()
-        } else {
-            if let Some(attr) = skip_attr {
-                accumulate(
-                    &mut errors,
-                    Error::new(
-                        attr.span(),
-                        "#[skip_broadcast] is superfluous: methods taking &self do not broadcast; use #[actify::broadcast] to opt in",
-                    ),
-                );
-            }
-            broadcast_attr.is_some()
-        };
-
         if let Err(error) = validate_signature_modifiers(method) {
+            accumulate(&mut errors, error);
+        }
+
+        if let Err(error) = validate_method_generics(method) {
             accumulate(&mut errors, error);
         }
 
@@ -234,7 +183,6 @@ impl MethodInfo {
             ident,
             is_mutable,
             is_async,
-            broadcasts,
             arg_names,
             arg_types,
             output_type,
@@ -262,9 +210,9 @@ fn get_impl_type_ident(impl_type: &Type) -> syn::Result<Ident> {
         })
 }
 
-/// Built-in compiler attributes that are safe to propagate onto generated trait
-/// signatures and handle impl methods. Everything else (proc-macro attributes
-/// like `#[instrument]`, actify-specific attributes like `#[skip_broadcast]`)
+/// Built-in compiler attributes that are safe to propagate onto the generated
+/// handle's methods and its message enum's variants. Everything else (proc-macro attributes
+/// like `#[instrument]`, actify-specific attributes like `#[skip]`)
 /// is stripped so it only appears on the original impl method where it belongs.
 const PROPAGATED_ATTRIBUTES: &[&str] = &[
     "doc",
@@ -282,7 +230,7 @@ const PROPAGATED_ATTRIBUTES: &[&str] = &[
 ///
 /// Only single-segment paths are checked (all built-in compiler attributes are
 /// single-segment). Multi-segment paths like `tracing::instrument` or
-/// `actify::skip_broadcast` are always excluded.
+/// `actify::skip` are always excluded.
 fn is_propagated_attribute(attr: &Attribute) -> bool {
     let segments = &attr.path().segments;
     segments.len() == 1
@@ -295,9 +243,9 @@ fn is_propagated_attribute(attr: &Attribute) -> bool {
 ///
 /// A proc-macro attribute like `#[instrument]` rewrites the function it is
 /// placed on, which is meant for the user's method and not for a generated
-/// method that forwards a call to it. An actify attribute like
-/// `#[skip_broadcast]` has already done its work during parsing. Both are
-/// stripped and remain only on the original impl method.
+/// method that forwards a call to it. An actify attribute like `#[skip]` has
+/// already done its work during parsing. Both are stripped and remain only on
+/// the original impl method.
 fn filter_attributes(attrs: &[Attribute]) -> Vec<Attribute> {
     attrs
         .iter()
@@ -306,12 +254,11 @@ fn filter_attributes(attrs: &[Attribute]) -> Vec<Attribute> {
         .collect()
 }
 
-/// Find one of actify's marker attributes (`broadcast`, `skip_broadcast`, `skip`).
+/// Find actify's `skip` marker attribute.
 ///
 /// Only the two spellings actify actually exports are recognised: bare
-/// (`#[broadcast]`, via a `use`) and crate-qualified (`#[actify::broadcast]`).
-/// Matching a name anywhere in the path would claim another crate's attribute,
-/// and the author would be told their own attribute is a superfluous actify one.
+/// (`#[skip]`, via a `use`) and crate-qualified (`#[actify::skip]`). Matching a
+/// name anywhere in the path would claim another crate's attribute.
 fn find_marker_attribute<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a Attribute> {
     attrs.iter().find(|attr| {
         let path = attr.path();
@@ -361,10 +308,44 @@ fn validate_signature_modifiers(method: &ImplItemFn) -> syn::Result<()> {
     Ok(())
 }
 
+/// Validate that a call on this method can travel as a message.
+///
+/// A call is a variant of the actor's message enum, which takes the impl
+/// block's parameters and nothing else, so a method's own generics have
+/// nowhere to live. A `where` clause is allowed instead: the variant carries a
+/// pointer to the method, built where the bound is in scope. That trick needs
+/// the method to return its result rather than a future, so an async method
+/// cannot use it.
+fn validate_method_generics(method: &ImplItemFn) -> syn::Result<()> {
+    if let Some(param) = method.sig.generics.params.first() {
+        return Err(Error::new_spanned(
+            param,
+            "Actor methods cannot declare generic parameters of their own: a call travels as a variant of the actor's message enum, which has no such parameter to hold the arguments (use a concrete type, e.g. fn(usize) -> usize rather than F: Fn(usize) -> usize)",
+        ));
+    }
+
+    let bounded = method
+        .sig
+        .generics
+        .where_clause
+        .as_ref()
+        .is_some_and(|clause| !clause.predicates.is_empty());
+
+    if bounded && method.sig.asyncness.is_some() {
+        return Err(Error::new_spanned(
+            method.sig.generics.where_clause.as_ref().unwrap(),
+            "An async actor method cannot carry a where clause of its own: the call would have to reach it through a function pointer, and one to an async method returns a future the message cannot hold",
+        ));
+    }
+
+    Ok(())
+}
+
 /// Validate that a return type can travel back from the actor task.
 ///
-/// Results are boxed as `Box<dyn Any + Send>`, which requires an owned
-/// `'static` type, and the generated code names the type in a `let` binding.
+/// A result travels home through a reply channel the call carries, so it has
+/// to be an owned `'static` type, and the generated code names it in a `let`
+/// binding.
 ///
 /// Unlike arguments this rejects a known set rather than accepting one: return
 /// types are more varied, and an allowlist risks refusing something that
@@ -374,10 +355,10 @@ fn validate_return_type(ty: &Type) -> syn::Result<()> {
         // `&'static T` outlives the actor and boxes fine. Any other borrow is
         // tied to the actor's state and cannot leave the task with the result.
         Type::Reference(reference)
-            if !reference
+            if reference
                 .lifetime
                 .as_ref()
-                .is_some_and(|lifetime| lifetime.ident == "static") =>
+                .is_none_or(|lifetime| lifetime.ident != "static") =>
         {
             Err(Error::new_spanned(
                 ty,
@@ -531,9 +512,8 @@ mod tests {
     #[test]
     fn actify_attrs_are_stripped() {
         let attrs: Vec<Attribute> = vec![
-            attr(parse_quote!(#[skip_broadcast])),
-            attr(parse_quote!(#[broadcast])),
-            attr(parse_quote!(#[actify::skip_broadcast])),
+            attr(parse_quote!(#[skip])),
+            attr(parse_quote!(#[actify::skip])),
             attr(parse_quote!(#[doc = "visible"])),
         ];
 
@@ -544,38 +524,23 @@ mod tests {
 
     #[test]
     fn marker_attributes_are_recognised_bare_and_qualified() {
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_some());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_some());
 
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_some());
-
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "skip_broadcast").is_some());
-
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "skip_broadcast").is_some());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_some());
     }
 
     #[test]
     fn marker_attributes_of_other_crates_are_ignored() {
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[other_crate::broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[other_crate::skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_none());
 
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[broadcast::configure]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip::configure]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_none());
 
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[a::b::skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "skip_broadcast").is_none());
-    }
-
-    #[test]
-    fn marker_attribute_names_do_not_overlap() {
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
-
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[a::b::skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_none());
     }
 
     #[test]

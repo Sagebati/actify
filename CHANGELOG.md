@@ -9,14 +9,201 @@ they record what changed rather than why, and are not exhaustive. 0.8.0 through
 
 ## [Unreleased]
 
+This release makes actify runtime-agnostic, and pays for it by removing
+everything that could only be built on one runtime's channels and timers. It
+also stops sending closures to actors: a call now travels as data, which is
+what makes the channel agnostic in more than name. It is breaking throughout.
+
+### Changed
+
+- A call travels to its actor as data, not as a boxed closure.
+
+  `#[actify]` generates a message enum beside each handle, with one variant
+  per method holding that call's arguments and the caller's reply channel.
+  Nothing on the way to the actor is boxed and nothing is downcast, so the two
+  downcast panics are gone. Measured with a counting allocator, a call went
+  from five allocations to two: the reply channel, and the queue slot carrying
+  the message.
+
+  This is what a runtime-agnostic channel was missing. The halves could come
+  from anywhere already, but the item they carried was a closure, which only
+  an in-process queue can hold.
+
+
+- The macro is the only way to make an actor.
+
+  `Handle::new`, `Handle::builder` and `impl Default for Handle` are gone, so
+  a bare value is no longer an actor. `Handle` remains as the plumbing a
+  generated handle wraps. An actor with nothing worth exposing writes an empty
+  block, which gives it `get`, `set` and `read_handle`:
+
+  ```rust
+  #[actify]
+  impl Counter {}
+  ```
+
+  A foreign type such as `i32` has no way in, since it cannot carry an impl
+  block. Wrap it in a newtype.
+
+
+- The actor's loop is generated rather than generic, and the `Dispatch` trait
+  is gone with it.
+
+  A loop of the actor's own takes the receiver and the actor by value, so its
+  future borrows nothing and the library can take it as an ordinary argument.
+  A call reaches its method through a plain `match` and a direct call, with no
+  trait in between. `Builtin` stays as the calls every handle has, run by
+  `run_builtin` rather than by a trait method.
+
+  This is what makes it one loop rather than two: the generic one existed only
+  to serve actors that had no generated one.
+
+
+- `#[actify]` generates a handle struct rather than a trait.
+
+  `GreeterHandle` is now a type, with `new`, `builder`, `get`, `set`,
+  `read_handle` and one method per actified method. Its message type is that
+  actor's enum, which is what lets a call be data at all.
+
+  `Handle::new(Greeter {})` still builds an actor, but the handle it returns
+  carries only the built-in calls. Write `GreeterHandle::new(Greeter {})` for
+  one that carries the methods too.
+
+  A handle can no longer be mocked behind the generated trait, since there is
+  no trait. A caller wanting to stand in for an actor defines its own trait
+  and implements it for the generated handle.
+
+
+- Every method of an actor has to live in one `#[actify]` block.
+
+  A block generates a handle and a message type, and an actor owns one state
+  served through one channel. A second block generates the same two names,
+  which the compiler reports as items defined twice. `#[actify(name = "...")]`
+  is gone with the reason for it. Blocks that a `#[cfg]` makes mutually
+  exclusive still work, because only one of them ever exists.
+
+
+- A method cannot declare generic parameters of its own.
+
+  Its arguments would have to live in a variant of an enum that has no such
+  parameter. A concrete function pointer says the same thing for most callers,
+  and a non-capturing closure coerces to one, so `handle.apply(5, |x| x * 2)`
+  still compiles against `fn apply(&self, value: usize, f: fn(usize) -> usize)`.
+
+  A method's own `where` clause is still allowed, except on an async method.
+  The call carries a pointer to the method so that the bound is proved where
+  the call is made, and a pointer to an async method returns a future the
+  message cannot hold.
+
+
+- An actor is a future the caller spawns, rather than a task actify spawns.
+
+  `Handle::builder(val).build()` returns the handle and the future that serves
+  it, and the caller spawns that future on any executor. Nothing runs until it
+  is polled, so a handle whose future was never spawned panics on every call,
+  reporting that the actor is not running.
+
+  `Handle::new` stays as the Tokio spelling of a build followed by a
+  `tokio::spawn`, behind the new default `tokio` feature. With
+  `default-features = false` there is no Tokio in the dependency graph at all.
+
+  ```rust
+  let (handle, actor) = Handle::builder(Greeter {}).build();
+  tokio::spawn(actor);
+  ```
+
+
+- The job channel comes from the caller.
+
+  `HandleBuilder::channel((sender, receiver))` takes both halves, in the order
+  every channel constructor returns them. `JobSender` and `JobReceiver` name
+  what the halves must implement, and blanket implementations cover every
+  `Sink` and `Stream` that is `Send + Sync + Unpin + 'static`, which covers
+  flume, futures-channel and, through `tokio-util`, a Tokio `mpsc`.
+
+  Both halves are taken by value on purpose: a sending half kept back by the
+  caller would outlive the last handle and keep the actor running.
+
+  The default channel is an unbounded `futures-channel` queue, where the
+  previous one was a Tokio `mpsc` bounded at 100. Queueing a call therefore
+  never waits, and the only thing a call awaits is its reply. Pass a bounded
+  channel to ask for backpressure instead.
+
+
+- Arguments and return values must be `Sync` as well as `Send`.
+
+  A channel's sending half holds the item it is queueing, so a job that is not
+  `Sync` leaves that half `!Sync` and the handle unshareable. The actor type
+  already had to be `Send + Sync + 'static`; its arguments and results now
+  match. The compiler points at each one.
+
+
+- A failed call no longer says whether the actor panicked or merely stopped.
+
+  Every handle carried a `watch::Receiver` for the exit reason, which is a
+  second channel per actor for one word of a panic message. A caller now reads
+  `Actor of type T is no longer running` either way. Which of the two it was
+  is still on the actor's own exit event, at ERROR for a panic and DEBUG for a
+  stop.
+
+### Removed
+
+Each of these could only be built on one runtime's channels or timers, and
+each is tracked for a runtime-agnostic replacement.
+
+- `Throttle`, `Frequency` and `BoxFuture`. A throttle needs a timer, which
+  ties the crate to one runtime's time driver.
+
+- `Cache` and `CacheRecvError`, along with `Handle::cache`, `cache_from`,
+  `cache_from_default` and their `ReadHandle` counterparts. A cache is a
+  subscriber to the broadcast channel that went with it.
+
+- `Handle::subscribe` and `ReadHandle::subscribe`, and broadcasting itself.
+  Nothing reads what the actor was sending now that the cache and the throttle
+  are gone, and every channel that can carry a broadcast is a runtime's own.
+
+- `Handle::wait_until` and `ReadHandle::wait_until`, which read through a
+  cache.
+
+- `Handle::set_if_changed`. Without a broadcast it differs from `set` only in
+  doing less work, and nothing can observe which ran.
+
+- The `#[actify::broadcast]`, `#[actify::skip_broadcast]` and
+  `#[actify(skip_broadcast)]` attributes, which have nothing left to steer.
+
+- The `profiler` feature, `broadcast_counts` and `cumulative_broadcast_counts`.
+  It counted broadcasts, and its registry is process-global `std` state.
+
+- `Handle::remaining_capacity`. It was `tokio::sync::mpsc::Sender::capacity`,
+  and a channel in general has no such thing.
+
+- `Handle::with`, `Handle::with_mut` and `ReadHandle::with`, and the fifteen
+  extension methods that took a closure: `retain` and `retain_mut` across
+  `Vec`, `VecDeque`, `HashMap`, `HashSet` and `String`; `sort_by` on `Vec`;
+  `map`, `filter`, `take_if`, `unwrap_or_else` and `get_or_insert_with` on
+  `Option`; and `modify` and `get_or_insert_with` on `HashMap`.
+
+  A closure is not data, so none of them can be a call. Reading part of an
+  actor without cloning all of it, or changing it in place, is what an
+  `#[actify]` method is for, and one is as atomic as `with_mut` was.
+
+- The public `Job<T>`. An actor names its own generated message type to give a
+  channel its item type; `Builtin` is the calls every handle has.
+
+- `Dispatch`, whose only implementors were `Builtin` and the generated message
+  types. The loop that used it is generated now.
+
 ### Fixed
 
 - `Handle` and `ReadHandle` are the size of one pointer. 0.9.0 added the
   actor's exit state to every handle as a `watch::Receiver`, which doubled
-  them from two words to four. The channel endpoints now sit behind one
+  them from two words to four. The channel endpoint now sits behind one
   `Arc`, so a handle is one word and cloning it is one reference count
   increment. A call's reply is no longer held across the wait for the exit
   reason, which shrinks the future behind every call.
+
+- `validate_return_type` states its guard the way `clippy::nonminimal_bool`
+  asks for, so the workspace passes `clippy -D warnings`.
 
 ## [0.9.0] - 2026-08-28
 

@@ -11,7 +11,23 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use actify::Handle;
+use actify::actify;
+
+/// An actor whose methods do the two things these tests need from inside the
+/// actor task: emit an event, and panic.
+#[derive(Clone, Debug)]
+struct Probe;
+
+#[actify]
+impl Probe {
+    fn log(&self, message: String) {
+        tracing::info!("{message}");
+    }
+
+    fn boom(&mut self) {
+        panic!("boom")
+    }
+}
 use tracing_subscriber::fmt::MakeWriter;
 
 /// Sets a TRACE-level fmt subscriber for this thread and returns its output.
@@ -89,10 +105,8 @@ fn parse_spawned_at(line: &str) -> &str {
 async fn test_actor_methods_run_inside_the_actor_span() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
-    handle
-        .with(|_| tracing::info!("emitted by an actor method"))
-        .await;
+    let handle = ProbeHandle::new(Probe);
+    handle.log("emitted by an actor method".to_string()).await;
 
     let output = output.contents();
     let line = output
@@ -101,7 +115,7 @@ async fn test_actor_methods_run_inside_the_actor_span() {
         .expect("the event is captured");
     // The prefix only: the span's identity fields are pinned by their own
     // tests.
-    let span = format!("actor{{actor_type=\"{}\"", std::any::type_name::<i32>());
+    let span = format!("actor{{actor_type=\"{}\"", std::any::type_name::<Probe>());
     assert!(line.contains(&span), "no actor span on: {line}");
 }
 
@@ -111,11 +125,11 @@ async fn test_actor_methods_run_inside_the_actor_span() {
 async fn test_same_type_actors_are_distinguishable_on_the_span() {
     let (_guard, output) = capture();
 
-    let first = Handle::new(7);
-    let second = Handle::new(7); // Its own line, so its own spawn site
+    let first = ProbeHandle::new(Probe);
+    let second = ProbeHandle::new(Probe); // Its own line, so its own spawn site
 
-    first.with(|_| tracing::info!("first probe")).await;
-    second.with(|_| tracing::info!("second probe")).await;
+    first.log("first probe".to_string()).await;
+    second.log("second probe".to_string()).await;
 
     let output = output.contents();
     let first_line = find_line(&output, "first probe");
@@ -148,7 +162,7 @@ async fn test_same_type_actors_are_distinguishable_on_the_span() {
 async fn test_the_exit_event_names_the_actor_instance() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
+    let handle = ProbeHandle::new(Probe);
     drop(handle);
     tokio::task::yield_now().await;
 
@@ -163,40 +177,15 @@ async fn test_the_exit_event_names_the_actor_instance() {
     assert_eq!(parse_actor_id(event_fields), parse_actor_id(line));
 }
 
-/// The span's actor_id is the profiler's spawn-order id, so a snapshot
-/// entry can be matched to that actor's log lines.
-#[tokio::test]
-async fn test_the_span_id_matches_the_profiler_snapshot() {
-    let (_guard, output) = capture();
-
-    #[derive(Clone, Debug)]
-    struct CorrelationProbe; // Unique, so the snapshot filter finds only this actor
-
-    let handle = Handle::new(CorrelationProbe);
-    handle.with(|_| tracing::info!("correlation probe")).await;
-
-    let snapshot_id = actify::broadcast_counts()
-        .into_iter()
-        .find(|actor| actor.actor_type.contains("CorrelationProbe"))
-        .expect("the probe is in the snapshot")
-        .id;
-
-    let output = output.contents();
-    assert_eq!(
-        parse_actor_id(find_line(&output, "correlation probe")),
-        snapshot_id
-    );
-}
-
 /// A panicking method is the exit a subscriber must not miss: the std panic
 /// hook prints to stderr, which never reaches a structured log pipeline.
 #[tokio::test]
 async fn test_a_panicking_actor_reports_its_exit_as_an_error() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
+    let handle = ProbeHandle::new(Probe);
     let caller = handle.clone();
-    let _ = tokio::spawn(async move { caller.with_mut(|_| panic!("boom")).await }).await;
+    let _ = tokio::spawn(async move { caller.boom().await }).await;
 
     let output = output.contents();
     let line = output
@@ -205,7 +194,7 @@ async fn test_a_panicking_actor_reports_its_exit_as_an_error() {
         .expect("the exit is reported");
     assert!(line.contains("ERROR"), "wrong level on: {line}");
     assert!(line.contains("reason=Panicked"), "no reason on: {line}");
-    let actor_type = format!("actor_type=\"{}\"", std::any::type_name::<i32>());
+    let actor_type = format!("actor_type=\"{}\"", std::any::type_name::<Probe>());
     assert!(line.contains(&actor_type), "no actor type on: {line}");
 }
 
@@ -215,7 +204,7 @@ async fn test_a_panicking_actor_reports_its_exit_as_an_error() {
 async fn test_a_dropped_actor_reports_its_exit() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
+    let handle = ProbeHandle::new(Probe);
     drop(handle);
     tokio::task::yield_now().await;
 
@@ -226,37 +215,4 @@ async fn test_a_dropped_actor_reports_its_exit() {
         .expect("the exit is reported");
     assert!(line.contains("DEBUG"), "wrong level on: {line}");
     assert!(line.contains("reason=Stopped"), "no reason on: {line}");
-}
-
-/// The lag report carries the actor type and the number of dropped values as
-/// fields, so a subscriber can tell which cache fell behind.
-#[tokio::test]
-async fn test_lag_reports_the_actor_type_and_count() {
-    let (_guard, output) = capture();
-
-    let handle = Handle::new(0);
-    let mut cache = handle.cache().await;
-    _ = cache.try_recv_newest(); // Consume first request
-
-    // More sets than the broadcast channel holds, so the cache must lag
-    for value in 0..150 {
-        handle.set(value).await;
-    }
-    _ = cache.try_recv_newest();
-
-    let output = output.contents();
-    let line = output
-        .lines()
-        .find(|line| line.contains("A cache receiver lagged"))
-        .expect("the lag is reported");
-    let actor_type = format!("actor_type=\"{}\"", std::any::type_name::<i32>());
-    assert!(line.contains(&actor_type), "no actor type on: {line}");
-    let messages: u64 = line
-        .split("messages=")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .expect("a count field")
-        .parse()
-        .expect("a numeric count");
-    assert!(messages > 0);
 }

@@ -1,6 +1,6 @@
-// EXPECTED: a skipped method is absent from the handle trait, so calling it
-// through a handle does not compile.
-use actify::{Handle, actify};
+// EXPECTED: a skipped method is absent from the generated handle, so calling
+// it through a handle does not compile.
+use actify::actify;
 
 #[derive(Clone, Debug)]
 struct MyActor {
@@ -21,7 +21,7 @@ impl MyActor {
 
 #[tokio::main]
 async fn main() {
-    let handle = Handle::new(MyActor { value: 1 });
+    let handle = MyActorHandle::new(MyActor { value: 1 });
 
     let _ = handle.exposed().await;
     let _ = handle.hidden().await;

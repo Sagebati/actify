@@ -36,17 +36,15 @@ fn compile_fail_tests() {
     // Method validation
     t.compile_fail("tests/compile_fail/static_method.rs");
     t.compile_fail("tests/compile_fail/unsafe_method.rs");
-    t.compile_fail("tests/compile_fail/by_value_self.rs");
 
-    // Superfluous broadcast attributes
-    t.compile_fail("tests/compile_fail/superfluous_skip_broadcast.rs");
-    t.compile_fail("tests/compile_fail/superfluous_skip_broadcast_ref_self.rs");
-    t.compile_fail("tests/compile_fail/superfluous_broadcast.rs");
-    t.compile_fail("tests/compile_fail/unnecessary_block_broadcast.rs");
+    // Method generics, which a variant of the message enum cannot hold
+    t.compile_fail("tests/compile_fail/method_generic.rs");
+    t.compile_fail("tests/compile_fail/method_const_generic.rs");
+    t.compile_fail("tests/compile_fail/async_method_where_clause.rs");
+    t.compile_fail("tests/compile_fail/by_value_self.rs");
 
     // Skipped methods
     t.compile_fail("tests/compile_fail/skipped_method_not_on_handle.rs");
-    t.compile_fail("tests/compile_fail/superfluous_broadcast_on_skip.rs");
 
     // Invalid custom name
     t.compile_fail("tests/compile_fail/invalid_custom_name.rs");

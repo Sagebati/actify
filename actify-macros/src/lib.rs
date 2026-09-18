@@ -9,39 +9,7 @@ mod parse;
 
 use proc_macro::TokenStream;
 
-/// Marks a method inside an `#[actify]` impl block as not broadcasting.
-///
-/// ```ignore
-/// #[actify]
-/// impl Counter {
-///     #[actify::skip_broadcast]
-///     fn bump_quietly(&mut self) { self.count += 1 }
-/// }
-/// ```
-///
-/// Expands to nothing: `#[actify]` reads it and strips it from the output.
-#[proc_macro_attribute]
-pub fn skip_broadcast(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Restores broadcasting for one method of an `#[actify(skip_broadcast)]` block.
-///
-/// ```ignore
-/// #[actify(skip_broadcast)]
-/// impl Counter {
-///     #[actify::broadcast]
-///     fn bump_loudly(&mut self) { self.count += 1 }
-/// }
-/// ```
-///
-/// Expands to nothing: `#[actify]` reads it and strips it from the output.
-#[proc_macro_attribute]
-pub fn broadcast(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
-}
-
-/// Leaves one method off the generated handle trait.
+/// Leaves one method off the generated handle.
 ///
 /// ```ignore
 /// #[actify]
@@ -64,34 +32,23 @@ pub fn skip(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Parsed arguments from `#[actify(...)]`.
 struct ActifyArgs {
-    skip_broadcast: bool,
     custom_name: Option<syn::LitStr>,
 }
 
 impl syn::parse::Parse for ActifyArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let mut args = ActifyArgs {
-            skip_broadcast: false,
-            custom_name: None,
-        };
+        let mut args = ActifyArgs { custom_name: None };
 
         while !input.is_empty() {
             let ident: syn::Ident = input.parse()?;
-            if ident == "skip_broadcast" {
-                args.skip_broadcast = true;
-            } else if ident == "name" {
+            if ident == "name" {
                 input.parse::<syn::Token![=]>()?;
                 let name: syn::LitStr = input.parse()?;
                 args.custom_name = Some(name);
-            } else if ident == "broadcast" {
-                return Err(syn::Error::new_spanned(
-                    ident,
-                    "`#[actify(broadcast)]` is not supported; methods taking &mut self broadcast by default, and a method taking &self opts in with `#[actify::broadcast]`",
-                ));
             } else {
                 return Err(syn::Error::new_spanned(
                     ident,
-                    "unknown actify attribute; expected `skip_broadcast` or `name = \"...\"`",
+                    "unknown actify attribute; expected `name = \"...\"`",
                 ));
             }
 
@@ -118,9 +75,13 @@ fn report(error: syn::Error, impl_block: &syn::ItemImpl) -> TokenStream {
     .into()
 }
 
-/// Expands an impl block so its methods can be called remotely through a handle.
-/// The generated handle trait keeps the method signatures, so arguments and
-/// return values stay typed.
+/// Expands an impl block so its methods can be called remotely through a
+/// handle.
+///
+/// Generates a message enum with one variant per method, a handle whose
+/// methods mirror the block's and send those variants, and a builder for it.
+/// Arguments and return values keep their types the whole way, so a call is
+/// checked as if it were a direct one.
 #[proc_macro_attribute]
 pub fn actify(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = syn::parse_macro_input!(item as syn::ItemImpl);
@@ -130,7 +91,7 @@ pub fn actify(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(error) => return report(error, &impl_block),
     };
 
-    match parse::ImplInfo::from_impl_block(&mut impl_block, args.skip_broadcast, args.custom_name) {
+    match parse::ImplInfo::from_impl_block(&mut impl_block, args.custom_name) {
         Ok(info) => codegen::generate(&info).into(),
         Err(error) => report(error, &impl_block),
     }

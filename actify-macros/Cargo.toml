@@ -16,5 +16,11 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 
+[features]
+default = []
+# Emits `Handle::new` on every generated handle. actify turns this on with its
+# own `tokio` feature, which is what `Handle::new` needs to spawn with.
+tokio = []
+
 [lib]
 proc-macro = true

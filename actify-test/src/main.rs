@@ -1,6 +1,6 @@
 //! Tests actify as any user that imports the library would.
 
-use actify::{Handle, ToView, actify};
+use actify::{ToView, actify};
 use std::{collections::HashMap, fmt::Debug, sync::Mutex};
 
 fn main() {}
@@ -21,14 +21,6 @@ where
         (i + 1) as f64
     }
 
-    fn bar<F>(&self, i: usize, f: F) -> usize
-    where
-        F: Fn(usize) -> usize + Send + Sync + 'static,
-    {
-        f(i)
-    }
-
-    #[actify::skip_broadcast]
     async fn baz(&mut self, i: i32) -> f64 {
         (i + 2) as f64
     }
@@ -56,14 +48,19 @@ impl SomeStruct {
     fn set_false(&mut self) {
         self.inner_bool = false
     }
-}
 
-#[actify(name = "SomeStructGetters", skip_broadcast)]
-impl SomeStruct {
     fn get_inner(&self) -> bool {
         self.inner_bool
     }
 }
+
+/// An actor with no methods of its own: an empty `#[actify]` block gives it a
+/// handle carrying the built-in calls and nothing else.
+#[derive(Clone, Debug, PartialEq)]
+struct Plain(i32);
+
+#[actify]
+impl Plain {}
 
 #[allow(dead_code)]
 /// Example Extension trait
@@ -159,18 +156,13 @@ mod shadowed_std_names {
     }
 }
 
-/// The shape that needs the generated trait to promise a `Send` future: a
-/// caller generic over the trait, whose call has to satisfy a `Send` bound.
-///
-/// Neither half alone needs the promise. A concrete `Handle<Thermostat>` is
-/// fine without it, because the compiler sees the future's real type and works
-/// `Send` out for itself. A generic caller that never requires `Send` is fine
-/// too. Only the combination fails, because there the compiler has nothing but
-/// the trait to go on, and `async fn` in a trait states no bounds.
+/// A call's future has to be `Send` for a caller to spawn it, which the
+/// generated method states by being an `async fn` on a concrete handle: the
+/// compiler sees the future's real type and works `Send` out for itself.
 ///
 /// Only the test build reaches it, hence the allowance.
 #[allow(dead_code)]
-mod generic_over_the_trait {
+mod send_calls {
     use actify::actify;
 
     #[derive(Clone, Debug)]
@@ -185,32 +177,15 @@ mod generic_over_the_trait {
         }
     }
 
-    /// Generic so that a test can pass the stand-in below instead of a real
-    /// actor, and requiring the call's future to be `Send`.
-    ///
-    /// The requirement is spelled out rather than reached through
-    /// `tokio::spawn`, which is where it comes from in practice: spawning, or
-    /// anything else that moves the future to another thread, demands `Send`.
-    pub async fn read<H>(handle: H) -> i32
-    where
-        H: ThermostatHandle,
-    {
+    /// Requires the call's future to be `Send`, spelled out rather than
+    /// reached through `tokio::spawn`, which is where the requirement comes
+    /// from in practice.
+    pub async fn read(handle: &ThermostatHandle) -> i32 {
         fn require_send<F: Send>(future: F) -> F {
             future
         }
 
         require_send(handle.reading()).await
-    }
-
-    /// A stand-in for the actor, written by hand. It is still written
-    /// `async fn`, which satisfies the trait as long as the future it produces
-    /// is `Send`, so existing stand-ins keep compiling.
-    pub struct FrozenThermostat;
-
-    impl ThermostatHandle for FrozenThermostat {
-        async fn reading(&self) -> i32 {
-            -40
-        }
     }
 }
 
@@ -304,38 +279,8 @@ impl ComplexActorTypes {
         f(val)
     }
 
-    fn with_multi_generic<A, B>(&self, a: A, b: B) -> (A, B)
-    where
-        A: Send + Sync + 'static,
-        B: Send + Sync + 'static,
-    {
-        (a, b)
-    }
-
     fn with_trait_object(&self, handler: Box<dyn Fn(i32) -> i32 + Send + Sync>) -> i32 {
         handler(42)
-    }
-
-    async fn async_generic<F>(&self, f: F) -> usize
-    where
-        F: Fn(usize) -> usize + Send + Sync + 'static,
-    {
-        f(42)
-    }
-
-    fn with_const_generic<const N: usize>(&self, arr: [u8; N]) -> usize
-    where
-        [u8; N]: Send + Sync + 'static,
-    {
-        arr.iter().map(|b| *b as usize).sum()
-    }
-
-    fn with_const_generic_and_type<T, const N: usize>(&self, _arr: [T; N]) -> usize
-    where
-        T: Send + Sync + 'static,
-        [T; N]: Send + Sync + 'static,
-    {
-        N
     }
 
     fn with_destructure(&self, (a, b): (i32, i32)) -> i32 {
@@ -414,27 +359,8 @@ impl CfgImplActor {
     }
 }
 
-#[derive(Clone, Debug)]
-struct SkipMultipleBroadcastsActor {
-    value: i32,
-}
-
-#[actify(skip_broadcast)]
-impl SkipMultipleBroadcastsActor {
-    fn skipped_method(&mut self, x: i32) -> i32 {
-        self.value = x;
-        x
-    }
-
-    #[actify::broadcast]
-    fn broadcast_method(&mut self, x: i32) -> i32 {
-        self.value = x;
-        x * 2
-    }
-}
-
-/// Interior mutability lets a `&self` method change what subscribers observe,
-/// which is the case `#[actify::broadcast]` exists for.
+/// A non-Clone actor reached through a view, whose `&self` methods change the
+/// state behind a lock.
 #[derive(Debug)]
 struct InteriorMutabilityActor {
     value: Mutex<i32>,
@@ -448,7 +374,6 @@ impl ToView<i32> for InteriorMutabilityActor {
 
 #[actify]
 impl InteriorMutabilityActor {
-    #[actify::broadcast]
     fn increment(&self) -> i32 {
         let mut value = self.value.lock().unwrap();
         *value += 1;
@@ -517,8 +442,8 @@ impl UnqualifiedInstrumentActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actify::{Frequency, Handle, Throttle, VecHandle};
-    use std::sync::{Arc, Mutex};
+    use actify::VecHandle;
+    use std::sync::Mutex;
     use std::time::Duration;
     use tokio::time::{Instant, sleep};
 
@@ -528,7 +453,7 @@ mod tests {
     async fn test_shadowed_std_names() {
         use crate::shadowed_std_names::{ShadowedStdNames, ShadowedStdNamesHandle};
 
-        let handle = Handle::new(ShadowedStdNames { value: 7 });
+        let handle = ShadowedStdNamesHandle::new(ShadowedStdNames { value: 7 });
 
         assert_eq!(handle.value().await, 7);
     }
@@ -538,12 +463,11 @@ mod tests {
     /// `Handle`.
     #[tokio::test]
     async fn test_a_generic_caller_can_require_a_send_future() {
-        use crate::generic_over_the_trait::{FrozenThermostat, Thermostat, read};
+        use crate::send_calls::{Thermostat, ThermostatHandle, read};
 
-        let handle = Handle::new(Thermostat { celsius: 21 });
+        let handle = ThermostatHandle::new(Thermostat { celsius: 21 });
 
-        assert_eq!(read(handle).await, 21);
-        assert_eq!(read(FrozenThermostat).await, -40);
+        assert_eq!(read(&handle).await, 21);
     }
 
     /// The skipped method stays on the type, the other one reaches the handle.
@@ -558,20 +482,20 @@ mod tests {
 
         assert_eq!(ledger.entries.len(), 2);
 
-        let handle = Handle::new(ledger);
+        let handle = LedgerHandle::new(ledger);
 
         assert_eq!(handle.count().await, 2);
     }
 
+    /// An actor's methods all live in one block, so one handle carries them
+    /// all, whether they read or write.
     #[tokio::test]
-    async fn test_custom_trait_name() {
-        let handle = Handle::new(SomeStruct { inner_bool: false });
+    async fn test_one_handle_carries_every_method_of_a_block() {
+        let handle = SomeStructHandle::new(SomeStruct { inner_bool: false });
 
-        // UFCS reaches each generated trait by its name
-        SomeStructHandle::set_true(&handle).await;
-        assert!(SomeStructGetters::get_inner(&handle).await);
+        handle.set_true().await;
+        assert!(handle.get_inner().await);
 
-        // Method-call syntax resolves without ambiguity between the two traits
         handle.set_false().await;
         assert!(!handle.get_inner().await);
     }
@@ -581,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_complex_arg_types() {
-        let handle = Handle::new(ComplexActorTypes);
+        let handle = ComplexActorTypesHandle::new(ComplexActorTypes);
 
         assert_eq!(handle.with_array([10, 20, 30, 40]).await, 10);
         assert_eq!(
@@ -589,16 +513,7 @@ mod tests {
             "hello: 42"
         );
         assert_eq!(handle.with_fn_ptr(|x| x * 2, 21).await, 42);
-        assert_eq!(
-            handle.with_multi_generic(42u32, "hello".to_string()).await,
-            (42u32, "hello".to_string())
-        );
         assert_eq!(handle.with_trait_object(Box::new(|x| x * 3)).await, 126);
-        assert_eq!(handle.async_generic(|x| x + 8).await, 50);
-        assert_eq!(handle.with_const_generic([1u8, 2, 3, 4]).await, 10);
-        assert_eq!(handle.with_const_generic([10u8, 20]).await, 30);
-        assert_eq!(handle.with_const_generic_and_type([1u32, 2, 3]).await, 3);
-        assert_eq!(handle.with_const_generic_and_type(["a", "b"]).await, 2);
         assert_eq!(handle.with_destructure((3, 7)).await, 10);
         assert_eq!(
             handle
@@ -610,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_attribute_propagation() {
-        let handle = Handle::new(AttributeTestActor);
+        let handle = AttributeTestActorHandle::new(AttributeTestActor);
 
         // #[doc] is propagated to the handle trait; the call only needs to compile
         assert_eq!(handle.with_doc(5).await, 5);
@@ -638,7 +553,7 @@ mod tests {
         assert_eq!(handle.some_os_specific_method().await, 2.);
 
         // #[cfg] on the impl block gates all generated traits and impls
-        let cfg_handle = Handle::new(CfgImplActor);
+        let cfg_handle = CfgImplActorHandle::new(CfgImplActor);
         #[cfg(target_os = "linux")]
         assert_eq!(cfg_handle.platform_value().await, "linux");
         #[cfg(target_os = "windows")]
@@ -647,12 +562,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_macro() {
-        let actor_handle = Handle::new(TestStruct {
+        let actor_handle = TestStructHandle::new(TestStruct {
             inner_data: "Test".to_string(),
         });
 
         assert_eq!(actor_handle.foo(0, HashMap::new()).await, 1.);
-        assert_eq!(actor_handle.bar(5, |i: usize| i + 10).await, 15);
         assert_eq!(actor_handle.baz(0).await, 2.);
     }
 
@@ -660,7 +574,7 @@ mod tests {
     /// trait reference or the call expression, where they are not valid syntax
     #[tokio::test]
     async fn test_inline_generic_bounds() {
-        let handle = Handle::new(InlineBounds { value: 7_i32 });
+        let handle = InlineBoundsHandle::new(InlineBounds { value: 7_i32 });
         assert_eq!(handle.get_value().await, 7);
     }
 
@@ -668,7 +582,7 @@ mod tests {
     /// `Wrapper<T>` reconstructed from the impl block's generic parameters
     #[tokio::test]
     async fn test_non_identity_generic_argument() {
-        let handle = Handle::new(Wrapper {
+        let handle = WrapperHandle::new(Wrapper {
             items: vec![1_u8, 2, 3],
         });
         assert_eq!(handle.first_item().await, Some(1));
@@ -678,13 +592,13 @@ mod tests {
     /// though borrows of the actor's own state are rejected
     #[tokio::test]
     async fn test_static_reference_return() {
-        let handle = Handle::new(CfgImplActor);
+        let handle = CfgImplActorHandle::new(CfgImplActor);
         assert!(!handle.platform_value().await.is_empty());
     }
 
     #[tokio::test]
     async fn test_impl_level_const_generic() {
-        let handle = Handle::new(ConstActor { data: [0_u8; 4] });
+        let handle = ConstActorHandle::new(ConstActor { data: [0_u8; 4] });
         assert_eq!(handle.slots().await, 4);
     }
 
@@ -692,7 +606,7 @@ mod tests {
     /// the identifiers the macro uses internally in the generated method body
     #[tokio::test]
     async fn test_shadowing_arg_names() {
-        let handle = Handle::new(ShadowingActor {
+        let handle = ShadowingActorHandle::new(ShadowingActor {
             value: String::new(),
         });
 
@@ -700,30 +614,40 @@ mod tests {
         assert_eq!(stored, "x-[1, 2]-3-true");
     }
 
-    /// A cache does not keep its actor alive: it only receives broadcasts, so
-    /// the actor still stops once the last handle goes out of scope.
+    /// An empty `#[actify]` block is how an actor asks for a handle carrying
+    /// the built-in calls and nothing else, which is the only way to make an
+    /// actor out of a type with no methods worth exposing.
+    #[tokio::test]
+    async fn test_an_empty_block_gives_a_handle_with_the_built_in_calls() {
+        let handle = PlainHandle::new(Plain(1));
+
+        assert_eq!(handle.get().await, Plain(1));
+
+        handle.set(Plain(2)).await;
+        assert_eq!(handle.get().await, Plain(2));
+        assert_eq!(handle.read_handle().get().await, Plain(2));
+    }
+
+    /// An actor stops once the last handle to it goes out of scope, while one
+    /// whose handle was cloned out of that scope keeps running.
     #[tokio::test]
     async fn test_handle_out_of_scope() {
         let baseline = alive_tasks();
-        let handle_1 = Handle::new(1);
+        let handle_1 = PlainHandle::new(Plain(1));
 
-        let mut cache_3 = {
-            let _handle_2 = Handle::new("test");
-            let handle_3 = Handle::new(1.); // This goes out of scope
+        {
+            let _handle_2 = PlainHandle::new(Plain(2));
+            let _handle_3 = PlainHandle::new(Plain(3)); // These go out of scope
             let _handle_1_clone = handle_1.clone();
-            handle_3.cache().await // But the cache doesn't
-        };
+        }
 
-        // Only handle_1's actor survives the scope, even though cache_3 does
+        // Only handle_1's actor survives the scope
         let remaining = await_alive_tasks(baseline + 1).await;
         assert_eq!(
             remaining,
             baseline + 1,
             "expected only handle_1's actor to still be running"
         );
-
-        // Its broadcast channel is closed, so the cache can no longer receive
-        assert!(cache_3.try_recv_newest().is_err());
     }
 
     /// An actor runs one job at a time, so two actors calling each other each
@@ -731,8 +655,8 @@ mod tests {
     /// this; the test keeps that statement true.
     #[tokio::test(start_paused = true)]
     async fn test_actors_calling_each_other_never_complete() {
-        let parser = Handle::new(Parser { store: None });
-        let store = Handle::new(Store { parser: None });
+        let parser = ParserHandle::new(Parser { store: None });
+        let store = StoreHandle::new(Store { parser: None });
 
         parser
             .set(Parser {
@@ -753,46 +677,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_vec() {
-        let actor_handle = Handle::new(vec![1, 2, 3]);
+        let actor_handle = VecHandle::new(vec![1, 2, 3]);
 
         assert_eq!(actor_handle.drain(1..).await, vec![2, 3]);
         assert_eq!(actor_handle.get().await, vec![1]);
     }
 
     #[tokio::test]
-    async fn test_skip_broadcast() {
-        let actor_handle = Handle::new(TestStruct {
-            inner_data: "Test".to_string(),
-        });
-
-        let mut rx = actor_handle.subscribe();
-        assert!(rx.try_recv().is_err()); // Nothing
-
-        actor_handle.foo(0, HashMap::new()).await;
-        assert!(rx.try_recv().is_ok());
-
-        actor_handle.foo(1, HashMap::new()).await;
-        assert!(rx.try_recv().is_ok());
-
-        actor_handle
-            .set(TestStruct {
-                inner_data: "Test2".to_string(),
-            })
-            .await;
-        assert!(rx.try_recv().is_ok());
-
-        actor_handle.baz(0).await;
-        assert!(rx.try_recv().is_err()); // Nothing
-
-        assert_eq!(
-            actor_handle.take_broadcast_counts().await,
-            HashMap::from([("foo", 2), ("set", 1)])
-        );
-    }
-
-    #[tokio::test]
     async fn test_instrument_attr_stripped_from_handle() {
-        let handle = Handle::new(InstrumentedActor { value: 10 });
+        let handle = InstrumentedActorHandle::new(InstrumentedActor { value: 10 });
 
         assert_eq!(handle.get_value().await, 10);
         handle.set_value(42).await;
@@ -803,39 +696,27 @@ mod tests {
     #[tokio::test]
     async fn test_unqualified_instrument_attr() {
         // Same test with unqualified `#[instrument]` (single-segment path)
-        let handle = Handle::new(UnqualifiedInstrumentActor { count: 0 });
+        let handle = UnqualifiedInstrumentActorHandle::new(UnqualifiedInstrumentActor { count: 0 });
 
         assert_eq!(handle.increment().await, 1);
         assert_eq!(handle.increment().await, 2);
         assert_eq!(handle.get_count().await, 2);
     }
 
+    /// A `&self` method behind interior mutability changes what a later read
+    /// sees, which is why the view is read from the actor rather than cloned
+    /// from it.
     #[tokio::test]
-    async fn test_block_skip_broadcast() {
-        let handle = Handle::new(SkipMultipleBroadcastsActor { value: 0 });
-        let mut rx = handle.subscribe();
-
-        // skipped_method has no #[broadcast], so block default (skip) applies
-        handle.skipped_method(10).await;
-        assert!(rx.try_recv().is_err());
-
-        // broadcast_method has #[broadcast], overriding the block default
-        handle.broadcast_method(20).await;
-        assert!(rx.try_recv().is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_ref_self_broadcast_opt_in() {
-        let handle: Handle<InteriorMutabilityActor, i32> = Handle::new(InteriorMutabilityActor {
+    async fn test_interior_mutability_is_visible_through_the_view() {
+        let handle = InteriorMutabilityActorHandle::<i32>::new(InteriorMutabilityActor {
             value: Mutex::new(0),
         });
-        let mut rx = handle.subscribe();
 
         assert_eq!(handle.peek().await, 0);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(handle.get().await, 0);
 
         assert_eq!(handle.increment().await, 1);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        assert_eq!(handle.get().await, 1);
     }
 
     /// Returns whether a future is still pending once nothing else can make
@@ -888,44 +769,11 @@ mod tests {
         alive_tasks()
     }
 
-    #[derive(Debug, Clone)]
-    struct TestClient {
-        count: Arc<Mutex<i32>>,
-    }
-
-    impl TestClient {
-        fn new() -> Self {
-            TestClient {
-                count: Arc::new(Mutex::new(0)),
-            }
-        }
-
-        fn call(&self, _event: i32) {
-            let mut count = self.count.lock().unwrap();
-            *count += 1;
-        }
-
-        /// Waits until the callback has fired at least `expected` times.
-        ///
-        /// Polls rather than sleeping for a duration long enough to fit that
-        /// many intervals, which would be a bet on the machine keeping up.
-        async fn await_count(&self, expected: i32) -> i32 {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            loop {
-                let count = *self.count.lock().unwrap();
-                if count >= expected || Instant::now() >= deadline {
-                    return count;
-                }
-                sleep(Duration::from_millis(5)).await;
-            }
-        }
-    }
-
     #[tokio::test]
     async fn test_handle_task_cleanup() {
         let baseline = alive_tasks();
 
-        let handle = Handle::new(42);
+        let handle = PlainHandle::new(Plain(42));
 
         let with_handle = await_alive_tasks(baseline + 1).await;
         assert!(
@@ -949,7 +797,7 @@ mod tests {
     async fn test_handle_clone_task_cleanup() {
         let baseline = alive_tasks();
 
-        let handle = Handle::new(42);
+        let handle = PlainHandle::new(Plain(42));
         let handle_clone = handle.clone();
 
         let with_handles = await_alive_tasks(baseline + 1).await;
@@ -983,92 +831,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_throttle_spawn_task_cleanup() {
-        let baseline = alive_tasks();
-
-        let handle = Handle::new(1);
-
-        let with_handle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
-
-        let client = TestClient::new();
-        let receiver = handle.subscribe();
-        Throttle::spawn(
-            client.clone(),
-            TestClient::call,
-            Frequency::Interval(Duration::from_millis(50)),
-            receiver,
-            Some(1),
-        );
-
-        let with_throttle = await_alive_tasks(baseline + 2).await;
-        assert_eq!(
-            with_throttle,
-            baseline + 2,
-            "Expected two tasks: Handle + Throttle. Baseline: {}, After: {}",
-            baseline,
-            with_throttle
-        );
-
-        // The actor task exits because its channel closes, and the throttle
-        // task because its broadcast receiver closes
-        drop(handle);
-
-        let after_drop = await_alive_tasks(baseline).await;
-        assert_eq!(
-            after_drop, baseline,
-            "Both tasks should exit after Handle is dropped. Baseline: {}, After: {}",
-            baseline, after_drop
-        );
-    }
-
-    #[tokio::test]
-    async fn test_spawn_interval_task_runs_until_aborted() {
-        let baseline = alive_tasks();
-
-        let client = TestClient::new();
-        let throttle = Throttle::spawn_interval(
-            client.clone(),
-            TestClient::call,
-            Duration::from_millis(50),
-            1,
-        );
-
-        let with_throttle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(
-            with_throttle,
-            baseline + 1,
-            "Expected one task for interval Throttle"
-        );
-
-        // No receiver is attached, so nothing ends the task on its own.
-        let count = client.await_count(2).await;
-        assert!(
-            count >= 2,
-            "Interval throttle should have fired repeatedly, count: {count}"
-        );
-        assert_eq!(
-            settled_alive_tasks().await,
-            baseline + 1,
-            "Interval throttle should still be running"
-        );
-
-        throttle.abort();
-
-        assert_eq!(
-            await_alive_tasks(baseline).await,
-            baseline,
-            "abort should release the task"
-        );
-    }
-
-    #[tokio::test]
     async fn test_multiple_handles_task_cleanup() {
         let baseline = alive_tasks();
 
-        let handle1 = Handle::new(1);
-        let handle2 = Handle::new("test");
-        let handle3 = Handle::new(1.5f64);
+        let handle1 = PlainHandle::new(Plain(1));
+        let handle2 = PlainHandle::new(Plain(2));
+        let handle3 = PlainHandle::new(Plain(3));
 
         let with_handles = await_alive_tasks(baseline + 3).await;
         assert_eq!(
@@ -1094,7 +862,7 @@ mod tests {
     async fn test_read_handle_keeps_actor_alive() {
         let baseline = alive_tasks();
 
-        let handle = Handle::new(1);
+        let handle = PlainHandle::new(Plain(1));
         let read_handle = handle.read_handle();
 
         let with_handle = await_alive_tasks(baseline + 1).await;
@@ -1109,7 +877,7 @@ mod tests {
             "The actor should stay alive while a ReadHandle exists"
         );
 
-        assert_eq!(read_handle.get().await, 1);
+        assert_eq!(read_handle.get().await, Plain(1));
 
         drop(read_handle);
 
@@ -1119,86 +887,19 @@ mod tests {
             "The actor should stop once the last ReadHandle is dropped"
         );
     }
-
-    #[tokio::test]
-    async fn test_cache_does_not_spawn_tasks() {
-        let baseline = alive_tasks();
-
-        let handle = Handle::new(42);
-
-        let with_handle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
-
-        let _cache = handle.cache().await;
-
-        let with_cache = settled_alive_tasks().await;
-        assert_eq!(
-            with_cache,
-            baseline + 1,
-            "Cache should not spawn additional tasks"
-        );
-
-        let _cache2 = handle.cache().await;
-        let _cache3 = handle.cache_from_default();
-
-        let with_more_caches = settled_alive_tasks().await;
-        assert_eq!(
-            with_more_caches,
-            baseline + 1,
-            "Multiple caches should not spawn additional tasks"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_cache_spawn_throttle_task_cleanup() {
-        let baseline = alive_tasks();
-
-        let handle = Handle::new(42);
-        let mut cache = handle.cache().await;
-
-        let with_handle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
-
-        let client = TestClient::new();
-        cache.spawn_throttle(client.clone(), TestClient::call, Frequency::OnEvent);
-
-        let with_throttle = await_alive_tasks(baseline + 2).await;
-        assert_eq!(
-            with_throttle,
-            baseline + 2,
-            "Expected two tasks: Handle + Throttle"
-        );
-
-        drop(cache);
-
-        let after_cache_drop = settled_alive_tasks().await;
-        assert_eq!(
-            after_cache_drop,
-            baseline + 2,
-            "Dropping cache should not affect tasks"
-        );
-
-        drop(handle);
-
-        let after_handle_drop = await_alive_tasks(baseline).await;
-        assert_eq!(
-            after_handle_drop, baseline,
-            "All tasks should exit after Handle is dropped"
-        );
-    }
 }
 
 /// Two actors holding handles to each other, which is the shape that deadlocks.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct Parser {
-    store: Option<Handle<Store>>,
+    store: Option<StoreHandle>,
 }
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct Store {
-    parser: Option<Handle<Parser>>,
+    parser: Option<ParserHandle>,
 }
 
 #[actify]
