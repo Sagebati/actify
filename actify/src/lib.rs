@@ -17,7 +17,6 @@
 //! * No need to define message structs or enums!
 //! * Automatic [broadcasting] of state changes to subscribers
 //! * Local synchronization through [`Cache`]
-//! * Rate-limited updates through [`Throttle`]
 //! * Built-in [extension traits] for common standard library types
 //!
 //! [tokio]: https://docs.rs/tokio/latest/tokio/
@@ -245,7 +244,7 @@
 //! # Broadcasting
 //!
 //! A method taking `&mut self` broadcasts the updated value to all subscribers
-//! after it returns. This keeps [`Cache`]s and [`Throttle`]s synchronized with
+//! after it returns. This keeps [`Cache`]s synchronized with
 //! the actor. A method taking `&self` does not broadcast.
 //!
 //! ```
@@ -362,45 +361,9 @@
 //! # ReadHandle
 //!
 //! A [`ReadHandle`] is a read-only view of an actor. It supports [`get`](ReadHandle::get),
-//! [`subscribe`](ReadHandle::subscribe), [`wait_until`](ReadHandle::wait_until), cache
-//! creation and throttle spawning, but cannot mutate the actor. Obtain one via
+//! [`subscribe`](ReadHandle::subscribe), [`wait_until`](ReadHandle::wait_until) and
+//! cache creation, but cannot mutate the actor. Obtain one via
 //! [`Handle::read_handle`].
-//!
-//! # Throttle
-//!
-//! A [`Throttle`] rate-limits broadcasted updates before forwarding them to a callback.
-//! Configure the rate with [`Frequency`]:
-//!
-//! - [`Frequency::OnEvent`]: sends every value as it arrives
-//! - [`Frequency::Interval`]: sends the current value every interval
-//! - [`Frequency::OnEventWhen`]: sends at most once per interval, and only when a
-//!   value arrived since the last send
-//!
-//! The callback can take a type other than the view: implement [`ToView<F>`] on
-//! the view type for the payload `F` you want, and the callback signature selects
-//! it. One actor can feed several throttles that way, each with its own payload.
-//!
-//! A throttle is spawned from a [`Handle`], a [`ReadHandle`] or a [`Cache`].
-//!
-//! [`Handle::spawn_async_throttle`], [`ReadHandle::spawn_async_throttle`] and
-//! [`Cache::spawn_async_throttle`] take an async callback. Each call is awaited before the throttle looks for the next
-//! value, so a callback slower than the [`Frequency`] delays the following send
-//! rather than running alongside it.
-//!
-//! The callback borrows the client and returns a [`BoxFuture`], so it is shaped
-//! `|client, value| Box::pin(..)`. An `async fn` taking `&self` wraps directly:
-//! `|db, value| Box::pin(db.write(value))`. See
-//! [`Handle::spawn_async_throttle`] for the longer forms.
-//!
-//! One call runs at a time either way, and nothing is received while it does.
-//! See [Slow calls](Throttle#slow-calls) for what that means for the updates
-//! arriving meanwhile.
-//!
-//! Spawning a throttle returns a [`Throttle`] handle. Dropping it leaves the
-//! throttle running, so a throttle attached to an actor can be spawned and
-//! forgotten: it stops when the actor does. [`Throttle::spawn_interval`] and
-//! [`Throttle::spawn_async_interval`] have no actor attached and run until
-//! [`Throttle::abort`] or the runtime shuts down, so both are `#[must_use]`.
 //!
 //! # Extension traits
 //!
@@ -498,7 +461,7 @@
 //!
 //! Every actor exit is reported with the reason as a field: at ERROR when a
 //! method panicked, at DEBUG when the actor stopped because its handles were
-//! dropped or its runtime shut down. A [`Cache`] or [`Throttle`] that falls
+//! dropped or its runtime shut down. A [`Cache`] that falls
 //! behind is reported at DEBUG with the number of dropped values in a
 //! `messages` field, and each broadcast at TRACE with the method that caused
 //! it.
@@ -540,7 +503,6 @@ mod extensions;
 mod handles;
 #[cfg(feature = "profiler")]
 mod profiler;
-mod throttle;
 
 // Reexport for easier reference
 pub use actify_macros::{actify, broadcast, skip, skip_broadcast};
@@ -550,7 +512,6 @@ pub use extensions::{
     vec::VecHandle, vecdeque::VecDequeHandle,
 };
 pub use handles::{Handle, ReadHandle, ToView};
-pub use throttle::{BoxFuture, Frequency, Throttle};
 
 #[cfg(feature = "profiler")]
 pub use profiler::{ActorCounts, CumulativeCounts, broadcast_counts, cumulative_broadcast_counts};

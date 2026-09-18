@@ -4,14 +4,12 @@ use tokio::sync::broadcast;
 
 use super::handle::{Handle, ToView};
 use crate::Cache;
-use crate::throttle::{BoxFuture, Frequency, Throttle};
 
 /// A clonable read-only handle that can only be used to read the internal value.
 ///
 /// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`],
 /// [`ReadHandle::with`], [`ReadHandle::subscribe`], [`ReadHandle::wait_until`],
-/// [`ReadHandle::cache`], [`ReadHandle::spawn_throttle`], and
-/// [`ReadHandle::spawn_async_throttle`].
+/// and [`ReadHandle::cache`].
 pub struct ReadHandle<T, V = T>(Handle<T, V>);
 
 impl<T, V> Clone for ReadHandle<T, V> {
@@ -137,51 +135,6 @@ where
     /// panics](crate#actor-lifetime-and-panics).
     pub async fn cache(&self) -> Cache<V> {
         self.0.cache().await
-    }
-
-    /// Spawns a [`Throttle`] that fires given a specified [`Frequency`].
-    ///
-    /// See [`Handle::spawn_throttle`] for the callback forms and an example.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn spawn_throttle<C, F, Fun>(&self, client: C, call: Fun, freq: Frequency) -> Throttle
-    where
-        C: Send + Sync + 'static,
-        V: ToView<F>,
-        F: Send + Sync + 'static,
-        Fun: Fn(&C, F) + Send + 'static,
-    {
-        self.0.spawn_throttle(client, call, freq).await
-    }
-
-    /// Spawns a [`Throttle`] whose callback is awaited before the next value is
-    /// looked for.
-    ///
-    /// `call` borrows the client and returns a [`BoxFuture`], built with
-    /// [`Box::pin`]. See [`Handle::spawn_async_throttle`] for how to write one.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn spawn_async_throttle<C, F, Fun>(
-        &self,
-        client: C,
-        call: Fun,
-        freq: Frequency,
-    ) -> Throttle
-    where
-        C: Send + Sync + 'static,
-        V: ToView<F>,
-        F: Send + Sync + 'static,
-        Fun: for<'a> Fn(&'a C, F) -> BoxFuture<'a> + Send + 'static,
-    {
-        self.0.spawn_async_throttle(client, call, freq).await
     }
 
     /// Returns the actor's current view. See [`Handle::get`].

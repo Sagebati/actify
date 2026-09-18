@@ -517,7 +517,7 @@ impl UnqualifiedInstrumentActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actify::{Frequency, Handle, Throttle, VecHandle};
+    use actify::{Handle, VecHandle};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::time::{Instant, sleep};
@@ -983,86 +983,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_throttle_spawn_task_cleanup() {
-        let baseline = alive_tasks();
-
-        let handle = Handle::new(1);
-
-        let with_handle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
-
-        let client = TestClient::new();
-        let receiver = handle.subscribe();
-        Throttle::spawn(
-            client.clone(),
-            TestClient::call,
-            Frequency::Interval(Duration::from_millis(50)),
-            receiver,
-            Some(1),
-        );
-
-        let with_throttle = await_alive_tasks(baseline + 2).await;
-        assert_eq!(
-            with_throttle,
-            baseline + 2,
-            "Expected two tasks: Handle + Throttle. Baseline: {}, After: {}",
-            baseline,
-            with_throttle
-        );
-
-        // The actor task exits because its channel closes, and the throttle
-        // task because its broadcast receiver closes
-        drop(handle);
-
-        let after_drop = await_alive_tasks(baseline).await;
-        assert_eq!(
-            after_drop, baseline,
-            "Both tasks should exit after Handle is dropped. Baseline: {}, After: {}",
-            baseline, after_drop
-        );
-    }
-
-    #[tokio::test]
-    async fn test_spawn_interval_task_runs_until_aborted() {
-        let baseline = alive_tasks();
-
-        let client = TestClient::new();
-        let throttle = Throttle::spawn_interval(
-            client.clone(),
-            TestClient::call,
-            Duration::from_millis(50),
-            1,
-        );
-
-        let with_throttle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(
-            with_throttle,
-            baseline + 1,
-            "Expected one task for interval Throttle"
-        );
-
-        // No receiver is attached, so nothing ends the task on its own.
-        let count = client.await_count(2).await;
-        assert!(
-            count >= 2,
-            "Interval throttle should have fired repeatedly, count: {count}"
-        );
-        assert_eq!(
-            settled_alive_tasks().await,
-            baseline + 1,
-            "Interval throttle should still be running"
-        );
-
-        throttle.abort();
-
-        assert_eq!(
-            await_alive_tasks(baseline).await,
-            baseline,
-            "abort should release the task"
-        );
-    }
-
-    #[tokio::test]
     async fn test_multiple_handles_task_cleanup() {
         let baseline = alive_tasks();
 
@@ -1146,44 +1066,6 @@ mod tests {
             with_more_caches,
             baseline + 1,
             "Multiple caches should not spawn additional tasks"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_cache_spawn_throttle_task_cleanup() {
-        let baseline = alive_tasks();
-
-        let handle = Handle::new(42);
-        let mut cache = handle.cache().await;
-
-        let with_handle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
-
-        let client = TestClient::new();
-        cache.spawn_throttle(client.clone(), TestClient::call, Frequency::OnEvent);
-
-        let with_throttle = await_alive_tasks(baseline + 2).await;
-        assert_eq!(
-            with_throttle,
-            baseline + 2,
-            "Expected two tasks: Handle + Throttle"
-        );
-
-        drop(cache);
-
-        let after_cache_drop = settled_alive_tasks().await;
-        assert_eq!(
-            after_cache_drop,
-            baseline + 2,
-            "Dropping cache should not affect tasks"
-        );
-
-        drop(handle);
-
-        let after_handle_drop = await_alive_tasks(baseline).await;
-        assert_eq!(
-            after_handle_drop, baseline,
-            "All tasks should exit after Handle is dropped"
         );
     }
 }

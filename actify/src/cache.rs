@@ -4,9 +4,6 @@ use tokio::sync::broadcast::{
     error::{RecvError, TryRecvError},
 };
 
-use crate::throttle::BoxFuture;
-use crate::{Frequency, Throttle, ToView};
-
 /// A simple caching struct that can be used to locally maintain a synchronized state with an actor.
 ///
 /// Create one via [`Handle::cache`](crate::Handle::cache) (initialized with the
@@ -628,62 +625,6 @@ where
                 Err(RecvError::Closed) => return Err(CacheRecvError::Closed),
             }
         }
-    }
-
-    /// Spawns a [`Throttle`] that fires given a specified [`Frequency`], given any broadcasted updates by the actor.
-    ///
-    /// First synchronizes the cache to the newest broadcast value, which
-    /// becomes the throttle's initial fire. Updates already queued in the
-    /// cache would otherwise never reach the throttle: its new subscription
-    /// starts at the channel tail. They are folded into that initial value
-    /// rather than delivered one by one, and they count as received by the
-    /// cache, so a later receive returns only updates broadcast after this
-    /// call.
-    ///
-    /// See [`Handle::spawn_throttle`](crate::Handle::spawn_throttle) for an example.
-    pub fn spawn_throttle<C, F, Fun>(&mut self, client: C, call: Fun, freq: Frequency) -> Throttle
-    where
-        C: Send + Sync + 'static,
-        V: ToView<F>,
-        F: Send + Sync + 'static,
-        Fun: Fn(&C, F) + Send + 'static,
-    {
-        // Subscribe before draining, so an update arriving in between reaches
-        // the throttle instead of being lost. It may then be part of the
-        // initial value and still be delivered, which a throttle absorbs.
-        let receiver = self.rx.resubscribe();
-        _ = self.drain_to_newest();
-        Throttle::spawn(client, call, freq, receiver, Some(self.inner.clone()))
-    }
-
-    /// Spawns a [`Throttle`] whose callback is awaited before the next value is
-    /// looked for.
-    ///
-    /// Synchronizes the cache first, exactly as
-    /// [`spawn_throttle`](Self::spawn_throttle) does.
-    ///
-    /// `call` borrows the client and returns a [`BoxFuture`](crate::BoxFuture),
-    /// built with [`Box::pin`]. See
-    /// [`Handle::spawn_async_throttle`](crate::Handle::spawn_async_throttle)
-    /// for how to write one.
-    pub fn spawn_async_throttle<C, F, Fun>(
-        &mut self,
-        client: C,
-        call: Fun,
-        freq: Frequency,
-    ) -> Throttle
-    where
-        C: Send + Sync + 'static,
-        V: ToView<F>,
-        F: Send + Sync + 'static,
-        Fun: for<'a> Fn(&'a C, F) -> BoxFuture<'a> + Send + 'static,
-    {
-        // Subscribe before draining, so an update arriving in between reaches
-        // the throttle instead of being lost. It may then be part of the
-        // initial value and still be delivered, which a throttle absorbs.
-        let receiver = self.rx.resubscribe();
-        _ = self.drain_to_newest();
-        Throttle::spawn_async(client, call, freq, receiver, Some(self.inner.clone()))
     }
 }
 
