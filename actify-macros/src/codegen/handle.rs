@@ -158,7 +158,7 @@ fn method_body(
 /// The self type is used exactly as written, so `impl<T> Wrapper<Vec<T>>` calls
 /// `<Wrapper<Vec<T>>>::method`. Rebuilding it from the impl block's parameter
 /// list would instead produce `Wrapper::<T>`, which names a different type.
-fn build_call_prefix(info: &ImplInfo) -> proc_macro2::TokenStream {
+pub(crate) fn build_call_prefix(info: &ImplInfo) -> proc_macro2::TokenStream {
     let impl_type = &info.impl_type;
 
     match &info.trait_path {

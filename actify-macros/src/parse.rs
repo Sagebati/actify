@@ -19,6 +19,8 @@ pub struct ImplInfo {
     pub impl_type: Box<Type>,
     /// Generated handle trait name, e.g. `TestStructHandle`.
     pub handle_trait_ident: Ident,
+    /// Generated message enum name, e.g. `TestStructCall`.
+    pub call_enum_ident: Ident,
     /// Impl-level generics (where clause guaranteed present via `make_where_clause`).
     pub generics: Generics,
     /// If this is a trait impl, the trait path (e.g. `ActorVec<T>`).
@@ -43,17 +45,25 @@ impl ImplInfo {
         // Ensure the where clause always exists so we can unwrap safely
         impl_block.generics.make_where_clause();
 
-        let handle_trait_ident = if let Some(lit) = custom_name {
-            let name = lit.value();
-            syn::parse_str::<Ident>(&name).map_err(|_| {
-                Error::new_spanned(
-                    &lit,
-                    "invalid `name` value: must be a valid Rust identifier",
-                )
-            })?
-        } else {
-            Ident::new(&format!("{type_ident}Handle"), Span::call_site())
+        // A custom name replaces the type's own in both generated names, so
+        // that the handle and the message it sends stay a matching pair.
+        let stem = match custom_name {
+            Some(lit) => {
+                let name = lit.value();
+                syn::parse_str::<Ident>(&name).map_err(|_| {
+                    Error::new_spanned(
+                        &lit,
+                        "invalid `name` value: must be a valid Rust identifier",
+                    )
+                })?
+            }
+            None => Ident::new(&format!("{type_ident}Handle"), Span::call_site()),
         };
+        let handle_trait_ident = stem.clone();
+        let call_enum_ident = Ident::new(
+            &format!("{}Call", stem.to_string().trim_end_matches("Handle")),
+            Span::call_site(),
+        );
 
         let trait_path = impl_block.trait_.as_ref().map(|(_, path, _)| path.clone());
 
@@ -86,6 +96,7 @@ impl ImplInfo {
         Ok(ImplInfo {
             impl_type: impl_block.self_ty.clone(),
             handle_trait_ident,
+            call_enum_ident,
             generics: impl_block.generics.clone(),
             trait_path,
             attributes,
