@@ -30,6 +30,35 @@ what makes the channel agnostic in more than name. It is breaking throughout.
   an in-process queue can hold.
 
 
+- The macro is the only way to make an actor.
+
+  `Handle::new`, `Handle::builder` and `impl Default for Handle` are gone, so
+  a bare value is no longer an actor. `Handle` remains as the plumbing a
+  generated handle wraps. An actor with nothing worth exposing writes an empty
+  block, which gives it `get`, `set` and `read_handle`:
+
+  ```rust
+  #[actify]
+  impl Counter {}
+  ```
+
+  A foreign type such as `i32` has no way in, since it cannot carry an impl
+  block. Wrap it in a newtype.
+
+
+- The actor's loop is generated rather than generic, and the `Dispatch` trait
+  is gone with it.
+
+  A loop of the actor's own takes the receiver and the actor by value, so its
+  future borrows nothing and the library can take it as an ordinary argument.
+  A call reaches its method through a plain `match` and a direct call, with no
+  trait in between. `Builtin` stays as the calls every handle has, run by
+  `run_builtin` rather than by a trait method.
+
+  This is what makes it one loop rather than two: the generic one existed only
+  to serve actors that had no generated one.
+
+
 - `#[actify]` generates a handle struct rather than a trait.
 
   `GreeterHandle` is now a type, with `new`, `builder`, `get`, `set`,
@@ -158,9 +187,11 @@ each is tracked for a runtime-agnostic replacement.
   actor without cloning all of it, or changing it in place, is what an
   `#[actify]` method is for, and one is as atomic as `with_mut` was.
 
-- The public `Job<T>` struct. `Job` is now an alias for the calls every handle
-  has, and an actor with an `#[actify]` block names its own message type to
-  give a channel its item type.
+- The public `Job<T>`. An actor names its own generated message type to give a
+  channel its item type; `Builtin` is the calls every handle has.
+
+- `Dispatch`, whose only implementors were `Builtin` and the generated message
+  types. The loop that used it is generated now.
 
 ### Fixed
 
