@@ -12,7 +12,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+futures-core = { workspace = true, features = ["std"] }
+futures-sink = { workspace = true, features = ["std"] }
+futures-channel = { workspace = true, features = ["std", "sink"] }
 tracing = { workspace = true, features = ["std"] }
 actify-macros.workspace = true
 

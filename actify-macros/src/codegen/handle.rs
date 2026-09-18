@@ -20,10 +20,11 @@ pub fn generate_trait(info: &ImplInfo) -> proc_macro2::TokenStream {
     }
 }
 
-/// Generate the handle trait implementation for `Handle<T, V>`.
+/// Generate the handle trait implementation for `Handle<T, V, S>`.
 ///
-/// Adds an unconstrained `__V` type parameter so that the generated trait
-/// implementation works for every view type, not just `Handle<T, T>`.
+/// Adds a `__V` and a `__S` type parameter so that the generated trait
+/// implementation works for every view type and every job channel, not just
+/// the defaults of `Handle<T>`.
 pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
     let impl_attrs = &info.attributes;
     let handle_trait_ident = &info.handle_trait_ident;
@@ -34,15 +35,19 @@ pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
     // TypeGenerics renders; the full Generics would emit `T: Clone` there.
     let (_, trait_generics, where_clause) = info.generics.split_for_impl();
 
-    // The future returned by each method holds `&Handle<T, __V>`, and a
+    // The future returned by each method holds `&Handle<T, __V, __S>`, and a
     // reference is Send only if what it points at is Sync, so promising Send
     // means the view type has to be bounded here, and code generic over that
-    // type must bound it too.
-    let mut generics_with_view = info.generics.clone();
-    generics_with_view
+    // type must bound it too. `__S` is what carries the call to the actor, so
+    // it is bounded by the trait a job channel's sending half implements.
+    let mut handle_generics = info.generics.clone();
+    handle_generics
         .params
         .push(syn::parse_quote!(__V: Send + Sync + 'static));
-    let (impl_generics, _, _) = generics_with_view.split_for_impl();
+    handle_generics
+        .params
+        .push(syn::parse_quote!(__S: ::actify::JobSender<::actify::Job<#impl_type>>));
+    let (impl_generics, _, _) = handle_generics.split_for_impl();
 
     let call_prefix = build_call_prefix(info);
     let methods = info
@@ -53,7 +58,7 @@ pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
     quote! {
         #(#impl_attrs)*
         #[allow(unused_parens)]
-        impl #impl_generics #handle_trait_ident #trait_generics for ::actify::Handle<#impl_type, __V> #where_clause
+        impl #impl_generics #handle_trait_ident #trait_generics for ::actify::Handle<#impl_type, __V, __S> #where_clause
         {
             #(#methods)*
         }
@@ -124,7 +129,7 @@ fn method_body(
         #(#attrs)*
         async fn #ident #method_generics(&self, #(#arg_names: #arg_types),*) #return_type #where_clause {
             let __actify_res = self.__send_job(
-                ::std::boxed::Box::new(|__actify_s: &mut ::actify::__private::Actor<#impl_type>, __actify_args: ::std::boxed::Box<dyn ::std::any::Any + Send>|
+                ::std::boxed::Box::new(|__actify_s: &mut ::actify::__private::Actor<#impl_type>, __actify_args: ::std::boxed::Box<dyn ::std::any::Any + Send + Sync>|
                 ::std::boxed::Box::pin(async move {
                     let (#(#arg_names),*): (#(#arg_types),*) = *__actify_args
                         .downcast()
@@ -132,7 +137,7 @@ fn method_body(
 
                     let __actify_result: #output_type = #call_prefix::#ident(&#mutability __actify_s.inner, #(#arg_names),*)#awaiter;
 
-                    ::std::boxed::Box::new(__actify_result) as ::std::boxed::Box<dyn ::std::any::Any + Send>
+                    ::std::boxed::Box::new(__actify_result) as ::std::boxed::Box<dyn ::std::any::Any + Send + Sync>
                 })),
                 ::std::boxed::Box::new((#(#arg_names),*)),
             ).await;

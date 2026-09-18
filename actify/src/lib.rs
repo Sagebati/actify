@@ -75,11 +75,11 @@
 //!         let res = self
 //!             .__send_job(
 //!                 Box::new(
-//!                     |s: &mut Actor<Greeter>, args: Box<dyn std::any::Any + Send>|
+//!                     |s: &mut Actor<Greeter>, args: Box<dyn std::any::Any + Send + Sync>|
 //!                     Box::pin(async move {
 //!                         let name: String = *args.downcast().unwrap();
 //!                         let result: String = Greeter::say_hi(&s.inner, name);
-//!                         Box::new(result) as Box<dyn std::any::Any + Send>
+//!                         Box::new(result) as Box<dyn std::any::Any + Send + Sync>
 //!                     })),
 //!                 Box::new(name),
 //!             )
@@ -175,7 +175,10 @@
 //!```
 //!
 //! ## Passing arguments by reference
-//! As referenced arguments cannot be sent to the actor, they are forbidden. All arguments must be owned:
+//! As referenced arguments cannot be sent to the actor, they are forbidden. All
+//! arguments must be owned, and `Send + Sync + 'static`: a job travels through
+//! a channel whose sending half a handle shares across tasks, so everything in
+//! it has to be shareable too. The same holds for return types.
 //! ```compile_fail
 //! # struct MyActor {}
 //! #[actify::actify]
@@ -185,6 +188,64 @@
 //!     }
 //! }
 //! ```
+//!
+//! # Spawning and the job channel
+//!
+//! [`Handle::builder`] returns the handle and the actor's future, so the
+//! caller chooses the executor. Nothing runs until that future is polled.
+//!
+//! ```
+//! # use actify::{Handle, actify};
+//! # #[derive(Clone, Debug)]
+//! # struct Greeter {}
+//! # #[actify]
+//! # impl Greeter {
+//! #     fn say_hi(&self, name: String) -> String { format!("hi {name}") }
+//! # }
+//! #[tokio::main]
+//! async fn main() {
+//!     let (handle, actor) = Handle::builder(Greeter {}).build();
+//!     tokio::spawn(actor);
+//!
+//!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
+//! }
+//! ```
+//!
+//! [`HandleBuilder::channel`] takes the channel itself, so the queue's bound
+//! and the crate behind it are the caller's too. The halves go in the order
+//! every channel constructor returns them, and anything that is a [`Sink`] and
+//! a [`Stream`] qualifies, which covers `flume`, `futures-channel` and, via
+//! `tokio-util`, a Tokio `mpsc`:
+//!
+//! ```
+//! # use actify::{Handle, actify};
+//! # #[derive(Clone, Debug)]
+//! # struct Greeter {}
+//! # #[actify]
+//! # impl Greeter {
+//! #     fn say_hi(&self, name: String) -> String { format!("hi {name}") }
+//! # }
+//! #[tokio::main]
+//! async fn main() {
+//!     let (tx, rx) = futures_channel::mpsc::channel(32);
+//!
+//!     let (handle, actor) = Handle::builder(Greeter {}).channel((tx, rx)).build();
+//!     tokio::spawn(actor);
+//!
+//!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
+//! }
+//! ```
+//!
+//! [`JobSender`] and [`JobReceiver`] are what the two halves have to
+//! implement, and the blanket implementations cover every [`Sink`] and
+//! [`Stream`] that is `Send`, `Sync`, `Unpin` and `'static`. A channel crate
+//! that provides neither can implement them directly.
+//!
+//! [`Handle::new`] is the Tokio spelling of a build followed by a
+//! `tokio::spawn`, kept for the common case.
+//!
+//! [`Sink`]: https://docs.rs/futures-sink/latest/futures_sink/trait.Sink.html
+//! [`Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 //!
 //! # Standard methods
 //!
@@ -298,12 +359,16 @@
 //!
 //! # Execution model
 //!
-//! Each actor is one Tokio task. It runs one job at a time and takes the next
-//! only after the current one returns, so calls never interleave and
-//! `&mut self` methods need no lock. A slow method delays every other call to
-//! that actor.
+//! Each actor is one future, which the caller spawns wherever it likes. It
+//! runs one job at a time and takes the next only after the current one
+//! returns, so calls never interleave and `&mut self` methods need no lock. A
+//! slow method delays every other call to that actor.
 //!
-//! Jobs queue in a bounded channel, so callers wait when it is full.
+//! Jobs queue in the channel the actor was built with. The default is
+//! unbounded, so queueing a call never waits and the only thing a call awaits
+//! is its reply. A bounded channel, passed to
+//! [`HandleBuilder::channel`], is how backpressure is asked
+//! for instead.
 //!
 //! Two actors that call each other never return: each waits for a reply the
 //! other can only produce once it is free. The same holds for a method calling
@@ -394,16 +459,21 @@ mod readme {
 extern crate self as actify;
 
 mod actor;
+mod channel;
 mod extensions;
 mod handles;
 
 // Reexport for easier reference
 pub use actify_macros::{actify, skip};
+pub use actor::Job;
+pub use channel::{Closed, JobReceiver, JobSender};
 pub use extensions::{
     map::HashMapHandle, option::OptionHandle, set::HashSetHandle, string::StringHandle,
     vec::VecHandle, vecdeque::VecDequeHandle,
 };
-pub use handles::{Handle, HandleBuilder, ReadHandle, ToView};
+pub use handles::{
+    DefaultChannel, DefaultReceiver, DefaultSender, Handle, HandleBuilder, ReadHandle, ToView,
+};
 
 /// The crate's own items that the [`actify`](macro@crate::actify) macro needs in
 /// generated code. Standard library types are named by absolute path instead.

@@ -3,13 +3,12 @@ use std::any::type_name;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use super::builder::HandleBuilder;
 use super::read_handle::ReadHandle;
 use crate::actor::{Actor, ActorMethod, Job};
-
-pub(crate) const CHANNEL_SIZE: usize = 100;
+use crate::channel::JobSender;
 
 /// Panics because the actor is gone, whether it stopped or a method of it
 /// panicked. Which of the two it was is on the actor's own exit event, at
@@ -75,28 +74,30 @@ impl<T: Clone> ToView<T> for T {
 /// actor itself. To expose a different type, implement [`ToView<V>`] and
 /// specify `V` explicitly (e.g. `Handle::<MyType, Summary>::new(val)`).
 /// [`Handle::with`] always reads the actor type.
-pub struct Handle<T, V = T> {
-    channels: Arc<Channels<T>>,
-    view: PhantomData<fn() -> V>,
+pub struct Handle<T, V = T, S = DefaultSender<T>> {
+    // The `Arc` is what makes a handle one pointer wide and what stops the
+    // actor: the last handle to drop drops the only sending half with it.
+    sender: Arc<S>,
+    actor: PhantomData<fn() -> (T, V)>,
 }
 
-/// The sending half every clone of a [`Handle`] shares. It sits behind an
-/// `Arc` so a handle is a single pointer and cloning it is one reference count
-/// increment, and so the actor stops when the last handle drops.
-pub(super) struct Channels<T> {
-    pub(super) tx: mpsc::Sender<Job<T>>,
-}
+/// The channel a handle uses when the caller supplies none: an unbounded
+/// [`futures_channel`] queue, so a call never waits to be queued.
+pub type DefaultSender<T> = futures_channel::mpsc::UnboundedSender<Job<T>>;
 
-impl<T, V> Clone for Handle<T, V> {
+/// The receiving half of [`DefaultSender`], which the actor future reads.
+pub type DefaultReceiver<T> = futures_channel::mpsc::UnboundedReceiver<Job<T>>;
+
+impl<T, V, S> Clone for Handle<T, V, S> {
     fn clone(&self) -> Self {
         Handle {
-            channels: Arc::clone(&self.channels),
-            view: PhantomData,
+            sender: Arc::clone(&self.sender),
+            actor: PhantomData,
         }
     }
 }
 
-impl<T, V> Debug for Handle<T, V> {
+impl<T, V, S> Debug for Handle<T, V, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let actor = type_name::<T>();
         let view = type_name::<V>();
@@ -168,7 +169,14 @@ where
     pub fn builder(val: T) -> HandleBuilder<T, V> {
         HandleBuilder::new(val)
     }
+}
 
+impl<T, V, S> Handle<T, V, S>
+where
+    T: ToView<V> + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: JobSender<Job<T>>,
+{
     /// Returns the actor's current view.
     ///
     /// For a `Clone` actor type without a [`ToView`] implementation of its own,
@@ -198,42 +206,38 @@ where
     }
 }
 
-impl<T, V> Handle<T, V> {
-    pub(super) fn from_channels(channels: Arc<Channels<T>>) -> Self {
+impl<T, V, S> Handle<T, V, S> {
+    pub(super) fn from_sender(sender: S) -> Self {
         Handle {
-            channels,
-            view: PhantomData,
+            sender: Arc::new(sender),
+            actor: PhantomData,
         }
     }
 
     /// Returns a [`ReadHandle`] that provides read-only access to this actor.
-    pub fn read_handle(&self) -> ReadHandle<T, V> {
+    pub fn read_handle(&self) -> ReadHandle<T, V, S> {
         ReadHandle::new(self.clone())
     }
 }
 
-impl<T: Send + Sync + 'static, V> Handle<T, V> {
-    /// Returns how many more jobs can be queued before a call has to wait.
-    ///
-    /// Falls as calls queue up and rises again as the actor serves them, so it
-    /// is the way to observe the actor falling behind.
-    pub fn remaining_capacity(&self) -> usize {
-        self.channels.tx.capacity()
-    }
-
+impl<T, V, S> Handle<T, V, S>
+where
+    T: Send + Sync + 'static,
+    S: JobSender<Job<T>>,
+{
     #[doc(hidden)]
     pub async fn __send_job(
         &self,
         call: ActorMethod<T>,
-        args: Box<dyn Any + Send>,
-    ) -> Box<dyn Any + Send> {
+        args: Box<dyn Any + Send + Sync>,
+    ) -> Box<dyn Any + Send + Sync> {
         let (respond_to, get_result) = oneshot::channel();
         let job = Job {
             call,
             args,
             respond_to,
         };
-        if self.channels.tx.send(job).await.is_ok() {
+        if self.sender.send(job).await.is_ok() {
             if let Ok(res) = get_result.await {
                 return res;
             }
@@ -244,18 +248,20 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     /// Sends a closure to the actor, handling all boxing/unboxing internally.
     async fn run<F, A, R>(&self, args: A, f: F) -> R
     where
-        F: FnOnce(&mut Actor<T>, A) -> R + Send + 'static,
-        A: Send + 'static,
-        R: Send + 'static,
+        F: FnOnce(&mut Actor<T>, A) -> R + Send + Sync + 'static,
+        A: Send + Sync + 'static,
+        R: Send + Sync + 'static,
     {
         let res = self
             .__send_job(
-                Box::new(move |s: &mut Actor<T>, boxed_args: Box<dyn Any + Send>| {
-                    Box::pin(async move {
-                        let args = *boxed_args.downcast::<A>().expect(DOWNCAST_FAIL);
-                        Box::new(f(s, args)) as Box<dyn Any + Send>
-                    })
-                }),
+                Box::new(
+                    move |s: &mut Actor<T>, boxed_args: Box<dyn Any + Send + Sync>| {
+                        Box::pin(async move {
+                            let args = *boxed_args.downcast::<A>().expect(DOWNCAST_FAIL);
+                            Box::new(f(s, args)) as Box<dyn Any + Send + Sync>
+                        })
+                    },
+                ),
                 Box::new(args),
             )
             .await;
@@ -281,7 +287,10 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     /// Panics if the actor has stopped, either because one of its methods
     /// panicked or because its runtime shut down. See [Actor lifetime and
     /// panics](crate#actor-lifetime-and-panics).
-    pub async fn set(&self, val: T) {
+    pub async fn set(&self, val: T)
+    where
+        T: Sync,
+    {
         self.run(val, |s, val| s.inner = val).await
     }
 
@@ -313,8 +322,8 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     /// panics](crate#actor-lifetime-and-panics).
     pub async fn with<R, F>(&self, f: F) -> R
     where
-        F: FnOnce(&T) -> R + Send + 'static,
-        R: Send + 'static,
+        F: FnOnce(&T) -> R + Send + Sync + 'static,
+        R: Send + Sync + 'static,
     {
         self.run(f, |s, f| f(&s.inner)).await
     }
@@ -348,8 +357,8 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     /// panics](crate#actor-lifetime-and-panics).
     pub async fn with_mut<R, F>(&self, f: F) -> R
     where
-        F: FnOnce(&mut T) -> R + Send + 'static,
-        R: Send + 'static,
+        F: FnOnce(&mut T) -> R + Send + Sync + 'static,
+        R: Send + Sync + 'static,
     {
         self.run(f, |s, f| f(&mut s.inner)).await
     }
@@ -575,15 +584,20 @@ mod tests {
         }
     }
 
-    /// Callers past the channel capacity wait for a slot instead of failing,
-    /// so every job is served. The sleep in each job holds the actor long
-    /// enough for all callers to pile up on the bounded channel.
+    /// A caller asks for backpressure by supplying a bounded channel. Callers
+    /// past its capacity then wait for a slot instead of failing, so every job
+    /// is still served. The sleep in each job holds the actor long enough for
+    /// all of them to pile up.
     #[tokio::test(start_paused = true)]
-    async fn test_callers_wait_when_the_job_channel_is_full() {
-        let handle = Handle::new(Ledger { seen: Vec::new() });
+    async fn test_callers_wait_when_a_bounded_job_channel_is_full() {
+        const CAPACITY: usize = 4;
+        let (handle, actor) = Handle::builder(Ledger { seen: Vec::new() })
+            .channel(futures_channel::mpsc::channel(CAPACITY))
+            .build();
+        tokio::spawn(actor);
 
         let mut calls = tokio::task::JoinSet::new();
-        for i in 0..2 * CHANNEL_SIZE {
+        for i in 0..8 * CAPACITY {
             let handle = handle.clone();
             calls.spawn(async move { handle.record(i).await });
         }
@@ -591,7 +605,24 @@ mod tests {
 
         let mut seen = handle.with(|ledger| ledger.seen.clone()).await;
         seen.sort();
-        assert_eq!(seen, (0..2 * CHANNEL_SIZE).collect::<Vec<_>>());
+        assert_eq!(seen, (0..8 * CAPACITY).collect::<Vec<_>>());
+    }
+
+    /// The default channel is unbounded, so queueing a call never waits: the
+    /// only thing a call awaits is the reply. A bounded channel this small
+    /// would make the sends alone outlive the actor's first job.
+    #[tokio::test(start_paused = true)]
+    async fn test_the_default_channel_never_makes_a_caller_wait_to_queue() {
+        let handle = Handle::new(Ledger { seen: Vec::new() });
+
+        let mut calls = tokio::task::JoinSet::new();
+        for i in 0..1000 {
+            let handle = handle.clone();
+            calls.spawn(async move { handle.record(i).await });
+        }
+        while calls.join_next().await.is_some() {}
+
+        assert_eq!(handle.with(|ledger| ledger.seen.len()).await, 1000);
     }
 
     #[derive(Debug, Clone)]

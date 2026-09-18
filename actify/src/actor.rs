@@ -2,8 +2,10 @@ use std::any::{Any, type_name};
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::pin::Pin;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::Instrument;
+
+use crate::channel::JobReceiver;
 
 /// A boxed future, as returned by an actor method.
 pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -50,14 +52,32 @@ impl<T> Actor<T> {
 /// The lifetime is bound with `for<'a>` because the returned future borrows the
 /// actor it was handed.
 pub(crate) type ActorMethod<T> = Box<
-    dyn for<'a> FnOnce(&'a mut Actor<T>, Box<dyn Any + Send>) -> BoxFuture<'a, Box<dyn Any + Send>>
-        + Send,
+    dyn for<'a> FnOnce(
+            &'a mut Actor<T>,
+            Box<dyn Any + Send + Sync>,
+        ) -> BoxFuture<'a, Box<dyn Any + Send + Sync>>
+        + Send
+        + Sync,
 >;
 
-pub(crate) struct Job<T> {
-    pub call: ActorMethod<T>,
-    pub args: Box<dyn Any + Send>,
-    pub respond_to: oneshot::Sender<Box<dyn Any + Send>>,
+/// One queued call on an actor of type `T`, as the job channel carries it.
+///
+/// Opaque: it is named only to give a channel its item type, as in
+/// `flume::unbounded::<Job<Greeter>>()`.
+/// Every part is `Sync` as well as `Send`, so that a job is `Sync` and the
+/// channel carrying it can be too. A channel's sending half holds the item it
+/// is queueing, so a job that is not `Sync` would leave that half `!Sync`, and
+/// a handle has to be shareable.
+pub struct Job<T> {
+    pub(crate) call: ActorMethod<T>,
+    pub(crate) args: Box<dyn Any + Send + Sync>,
+    pub(crate) respond_to: oneshot::Sender<Box<dyn Any + Send + Sync>>,
+}
+
+impl<T> Debug for Job<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Job<{}>", type_name::<T>())
+    }
 }
 
 /// Why an actor stopped serving jobs. Reported on the actor's own exit event;
@@ -117,10 +137,11 @@ impl Drop for ExitGuard {
 /// manual wrapper rather than `#[tracing::instrument]`: on an async fn the
 /// attribute creates its span at first poll, inside the spawned task, where
 /// the creation context is gone.
-pub(crate) fn serve<T: Send + Sync + 'static>(
-    rx: mpsc::Receiver<Job<T>>,
-    actor: Actor<T>,
-) -> impl Future<Output = ()> {
+pub(crate) fn serve<T, R>(rx: R, actor: Actor<T>) -> impl Future<Output = ()> + Send
+where
+    T: Send + Sync + 'static,
+    R: JobReceiver<Job<T>>,
+{
     let span = tracing::info_span!(
         "actor",
         actor_type = type_name::<T>(),
@@ -130,7 +151,11 @@ pub(crate) fn serve<T: Send + Sync + 'static>(
     run(rx, actor).instrument(span)
 }
 
-async fn run<T: Send + Sync + 'static>(mut rx: mpsc::Receiver<Job<T>>, mut actor: Actor<T>) {
+async fn run<T, R>(mut rx: R, mut actor: Actor<T>)
+where
+    T: Send + Sync + 'static,
+    R: JobReceiver<Job<T>>,
+{
     let _guard = ExitGuard {
         actor_type: type_name::<T>(),
         actor_id: actor.id,
