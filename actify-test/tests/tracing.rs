@@ -11,7 +11,23 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use actify::Handle;
+use actify::actify;
+
+/// An actor whose methods do the two things these tests need from inside the
+/// actor task: emit an event, and panic.
+#[derive(Clone, Debug)]
+struct Probe;
+
+#[actify]
+impl Probe {
+    fn log(&self, message: String) {
+        tracing::info!("{message}");
+    }
+
+    fn boom(&mut self) {
+        panic!("boom")
+    }
+}
 use tracing_subscriber::fmt::MakeWriter;
 
 /// Sets a TRACE-level fmt subscriber for this thread and returns its output.
@@ -89,10 +105,8 @@ fn parse_spawned_at(line: &str) -> &str {
 async fn test_actor_methods_run_inside_the_actor_span() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
-    handle
-        .with(|_| tracing::info!("emitted by an actor method"))
-        .await;
+    let handle = ProbeHandle::new(Probe);
+    handle.log("emitted by an actor method".to_string()).await;
 
     let output = output.contents();
     let line = output
@@ -101,7 +115,7 @@ async fn test_actor_methods_run_inside_the_actor_span() {
         .expect("the event is captured");
     // The prefix only: the span's identity fields are pinned by their own
     // tests.
-    let span = format!("actor{{actor_type=\"{}\"", std::any::type_name::<i32>());
+    let span = format!("actor{{actor_type=\"{}\"", std::any::type_name::<Probe>());
     assert!(line.contains(&span), "no actor span on: {line}");
 }
 
@@ -111,11 +125,11 @@ async fn test_actor_methods_run_inside_the_actor_span() {
 async fn test_same_type_actors_are_distinguishable_on_the_span() {
     let (_guard, output) = capture();
 
-    let first = Handle::new(7);
-    let second = Handle::new(7); // Its own line, so its own spawn site
+    let first = ProbeHandle::new(Probe);
+    let second = ProbeHandle::new(Probe); // Its own line, so its own spawn site
 
-    first.with(|_| tracing::info!("first probe")).await;
-    second.with(|_| tracing::info!("second probe")).await;
+    first.log("first probe".to_string()).await;
+    second.log("second probe".to_string()).await;
 
     let output = output.contents();
     let first_line = find_line(&output, "first probe");
@@ -148,7 +162,7 @@ async fn test_same_type_actors_are_distinguishable_on_the_span() {
 async fn test_the_exit_event_names_the_actor_instance() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
+    let handle = ProbeHandle::new(Probe);
     drop(handle);
     tokio::task::yield_now().await;
 
@@ -169,9 +183,9 @@ async fn test_the_exit_event_names_the_actor_instance() {
 async fn test_a_panicking_actor_reports_its_exit_as_an_error() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
+    let handle = ProbeHandle::new(Probe);
     let caller = handle.clone();
-    let _ = tokio::spawn(async move { caller.with_mut(|_| panic!("boom")).await }).await;
+    let _ = tokio::spawn(async move { caller.boom().await }).await;
 
     let output = output.contents();
     let line = output
@@ -180,7 +194,7 @@ async fn test_a_panicking_actor_reports_its_exit_as_an_error() {
         .expect("the exit is reported");
     assert!(line.contains("ERROR"), "wrong level on: {line}");
     assert!(line.contains("reason=Panicked"), "no reason on: {line}");
-    let actor_type = format!("actor_type=\"{}\"", std::any::type_name::<i32>());
+    let actor_type = format!("actor_type=\"{}\"", std::any::type_name::<Probe>());
     assert!(line.contains(&actor_type), "no actor type on: {line}");
 }
 
@@ -190,7 +204,7 @@ async fn test_a_panicking_actor_reports_its_exit_as_an_error() {
 async fn test_a_dropped_actor_reports_its_exit() {
     let (_guard, output) = capture();
 
-    let handle = Handle::new(7);
+    let handle = ProbeHandle::new(Probe);
     drop(handle);
     tokio::task::yield_now().await;
 

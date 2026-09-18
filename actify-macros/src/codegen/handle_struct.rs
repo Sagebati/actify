@@ -200,37 +200,6 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
     let output = &method.output_type;
     let return_type = super::handle::quote_return_type(output);
 
-    if carrier(method).is_none() {
-        let prefix = super::handle::build_call_prefix(info);
-        let impl_type = &info.impl_type;
-        let mutability = method.is_mutable.then(|| quote! { mut });
-        let awaiter = method.is_async.then(|| quote! { .await });
-        // A call that cannot be data still has to reach its actor, so it goes
-        // as a closure, in the variant that carries one.
-        return quote! {
-            #(#attrs)*
-            pub async fn #ident #method_generics(&self, #(#arg_names: #arg_types),*) #return_type
-            #where_clause
-            {
-                let __actify_res = self.0.__send_job(
-                    ::std::boxed::Box::new(|__actify_s: &mut ::actify::__private::Actor<#impl_type>, __actify_args: ::std::boxed::Box<dyn ::std::any::Any + Send + Sync>|
-                    ::std::boxed::Box::pin(async move {
-                        let (#(#arg_names),*): (#(#arg_types),*) = *__actify_args
-                            .downcast()
-                            .expect("Downcasting failed due to an error in the Actify macro");
-
-                        let __actify_result: #output = #prefix::#ident(&#mutability __actify_s.inner, #(#arg_names),*)#awaiter;
-
-                        ::std::boxed::Box::new(__actify_result) as ::std::boxed::Box<dyn ::std::any::Any + Send + Sync>
-                    })),
-                    ::std::boxed::Box::new((#(#arg_names),*)),
-                ).await;
-
-                *__actify_res.downcast().expect("Downcasting failed due to an error in the Actify macro")
-            }
-        };
-    }
-
     let variant = variant_ident(method);
     let call = &info.call_enum_ident;
 
@@ -238,7 +207,7 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
     // actor's `dispatch`, so the call carries a pointer to the method rather
     // than having `dispatch` name it. The closure captures nothing, which is
     // what lets it coerce to a plain function pointer.
-    let thunk = (carrier(method) == Some(Carrier::Thunk)).then(|| {
+    let thunk = (carrier(method) == Carrier::Thunk).then(|| {
         let prefix = super::handle::build_call_prefix(info);
         quote! {
             __actify_thunk: |__actify_inner #(, #arg_names)*| {

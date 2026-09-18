@@ -1,0 +1,6 @@
+error: An async actor method cannot carry a where clause of its own: the call would have to reach it through a function pointer, and one to an async method returns a future the message cannot hold
+  --> tests/compile_fail/async_method_where_clause.rs:11:5
+   |
+11 | /     where
+12 | |         i32: Ord,
+   | |_________________^

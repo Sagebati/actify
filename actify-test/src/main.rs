@@ -21,13 +21,6 @@ where
         (i + 1) as f64
     }
 
-    fn bar<F>(&self, i: usize, f: F) -> usize
-    where
-        F: Fn(usize) -> usize + Send + Sync + 'static,
-    {
-        f(i)
-    }
-
     async fn baz(&mut self, i: i32) -> f64 {
         (i + 2) as f64
     }
@@ -278,38 +271,8 @@ impl ComplexActorTypes {
         f(val)
     }
 
-    fn with_multi_generic<A, B>(&self, a: A, b: B) -> (A, B)
-    where
-        A: Send + Sync + 'static,
-        B: Send + Sync + 'static,
-    {
-        (a, b)
-    }
-
     fn with_trait_object(&self, handler: Box<dyn Fn(i32) -> i32 + Send + Sync>) -> i32 {
         handler(42)
-    }
-
-    async fn async_generic<F>(&self, f: F) -> usize
-    where
-        F: Fn(usize) -> usize + Send + Sync + 'static,
-    {
-        f(42)
-    }
-
-    fn with_const_generic<const N: usize>(&self, arr: [u8; N]) -> usize
-    where
-        [u8; N]: Send + Sync + 'static,
-    {
-        arr.iter().map(|b| *b as usize).sum()
-    }
-
-    fn with_const_generic_and_type<T, const N: usize>(&self, _arr: [T; N]) -> usize
-    where
-        T: Send + Sync + 'static,
-        [T; N]: Send + Sync + 'static,
-    {
-        N
     }
 
     fn with_destructure(&self, (a, b): (i32, i32)) -> i32 {
@@ -542,16 +505,7 @@ mod tests {
             "hello: 42"
         );
         assert_eq!(handle.with_fn_ptr(|x| x * 2, 21).await, 42);
-        assert_eq!(
-            handle.with_multi_generic(42u32, "hello".to_string()).await,
-            (42u32, "hello".to_string())
-        );
         assert_eq!(handle.with_trait_object(Box::new(|x| x * 3)).await, 126);
-        assert_eq!(handle.async_generic(|x| x + 8).await, 50);
-        assert_eq!(handle.with_const_generic([1u8, 2, 3, 4]).await, 10);
-        assert_eq!(handle.with_const_generic([10u8, 20]).await, 30);
-        assert_eq!(handle.with_const_generic_and_type([1u32, 2, 3]).await, 3);
-        assert_eq!(handle.with_const_generic_and_type(["a", "b"]).await, 2);
         assert_eq!(handle.with_destructure((3, 7)).await, 10);
         assert_eq!(
             handle
@@ -605,7 +559,6 @@ mod tests {
         });
 
         assert_eq!(actor_handle.foo(0, HashMap::new()).await, 1.);
-        assert_eq!(actor_handle.bar(5, |i: usize| i + 10).await, 15);
         assert_eq!(actor_handle.baz(0).await, 2.);
     }
 

@@ -8,7 +8,7 @@
 use std::any::type_name;
 use std::fmt::{self, Debug};
 
-use crate::actor::{Actor, ClosureJob, Dispatch, Reply};
+use crate::actor::{Actor, Dispatch, Reply};
 use crate::handles::ToView;
 
 /// The calls every handle has, whatever methods its actor declares.
@@ -54,45 +54,10 @@ where
 }
 
 /// The message a [`Handle`](crate::Handle) sends when the caller names no
-/// other.
+/// other: the calls every handle has, and nothing else.
 ///
-/// Name it to give a channel its item type, as in
-/// `flume::unbounded::<Job<Greeter>>()`.
-pub enum Job<T, V = T> {
-    /// One of the calls every handle has.
-    Builtin(Builtin<T, V>),
-    /// A closure, as [`Handle::with`](crate::Handle::with) and
-    /// [`Handle::with_mut`](crate::Handle::with_mut) send.
-    Closure(ClosureJob<T>),
-}
-
-impl<T, V> Debug for Job<T, V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Job<{}>", type_name::<T>())
-    }
-}
-
-impl<T, V> From<Builtin<T, V>> for Job<T, V> {
-    fn from(builtin: Builtin<T, V>) -> Self {
-        Job::Builtin(builtin)
-    }
-}
-
-impl<T, V> From<ClosureJob<T>> for Job<T, V> {
-    fn from(job: ClosureJob<T>) -> Self {
-        Job::Closure(job)
-    }
-}
-
-impl<T, V> Dispatch<T> for Job<T, V>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Send + 'static,
-{
-    async fn dispatch(self, actor: &mut Actor<T>) {
-        match self {
-            Job::Builtin(builtin) => builtin.dispatch(actor).await,
-            Job::Closure(job) => job.dispatch(actor).await,
-        }
-    }
-}
+/// An actor with an `#[actify]` block has a message type of its own, generated
+/// beside its handle, which carries these as one of its variants. Name this one
+/// to give a channel its item type for an actor without such a block, as in
+/// `flume::unbounded::<Job<i32>>()`.
+pub type Job<T, V = T> = Builtin<T, V>;

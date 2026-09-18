@@ -42,30 +42,21 @@ pub enum Carrier {
     Thunk,
 }
 
-/// How a method's call travels, or `None` if it cannot travel at all.
+/// How a method's call reaches it.
 ///
-/// A method with generics of its own cannot: its arguments would have to live
-/// in a variant of an enum that has no such parameter.
-pub fn carrier(method: &MethodInfo) -> Option<Carrier> {
-    if !method.method_generics.params.is_empty() {
-        return None;
-    }
+/// The parser has already refused anything neither shape can carry, so every
+/// method that reaches here is one or the other.
+pub fn carrier(method: &MethodInfo) -> Carrier {
     let bounded = method
         .method_generics
         .where_clause
         .as_ref()
         .is_some_and(|clause| !clause.predicates.is_empty());
-    match (bounded, method.is_async) {
-        (false, _) => Some(Carrier::Direct),
-        // A thunk to an async method would have to return a boxed future.
-        (true, true) => None,
-        (true, false) => Some(Carrier::Thunk),
+    if bounded {
+        Carrier::Thunk
+    } else {
+        Carrier::Direct
     }
-}
-
-/// Whether a method can travel as a variant rather than as a closure.
-pub fn is_message(method: &MethodInfo) -> bool {
-    carrier(method).is_some()
 }
 
 /// The function-pointer field a thunked variant carries.
@@ -181,14 +172,14 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view>));
     let (dispatch_impl_generics, _, dispatch_where) = dispatch_generics.split_for_impl();
 
-    let variants = info.methods.iter().filter(|m| is_message(m)).map(|method| {
+    let variants = info.methods.iter().map(|method| {
         let variant = variant_ident(method);
         let arg_names: Vec<_> = method.arg_names.iter().collect();
         let arg_types: Vec<_> = method.arg_types.iter().collect();
         let output = &method.output_type;
         let doc = format!("The `{}` call.", method.ident);
         let attrs = cfg_attrs(method);
-        let thunk = (carrier(method) == Some(Carrier::Thunk)).then(|| {
+        let thunk = (carrier(method) == Carrier::Thunk).then(|| {
             let ty = thunk_type(method, impl_type);
             quote! { __actify_thunk: #ty, }
         });
@@ -203,7 +194,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         }
     });
 
-    let arms = info.methods.iter().filter(|m| is_message(m)).map(|method| {
+    let arms = info.methods.iter().map(|method| {
         let variant = variant_ident(method);
         let ident = &method.ident;
         let arg_names: Vec<_> = method.arg_names.iter().collect();
@@ -212,7 +203,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         let mutability = method.is_mutable.then(|| quote! { mut });
         let awaiter = method.is_async.then(|| quote! { .await });
         let attrs = cfg_attrs(method);
-        let thunked = carrier(method) == Some(Carrier::Thunk);
+        let thunked = carrier(method) == Carrier::Thunk;
         let binding = thunked.then(|| quote! { __actify_thunk, });
         let invocation = if thunked {
             quote! { __actify_thunk(&#mutability __actify_actor.inner #(, #arg_names)*) }
@@ -228,7 +219,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         }
     });
 
-    let debug_arms = info.methods.iter().filter(|m| is_message(m)).map(|method| {
+    let debug_arms = info.methods.iter().map(|method| {
         let variant = variant_ident(method);
         let name = variant.to_string();
         let attrs = cfg_attrs(method);
@@ -254,8 +245,6 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         pub enum #call<#(#declared,)* #view = #impl_type> {
             /// One of the calls every handle has, whatever its actor declares.
             __ActifyBuiltin(::actify::Builtin<#impl_type, #view>),
-            /// A call that cannot travel as data, carried as a closure.
-            __ActifyClosure(::actify::__private::ClosureJob<#impl_type>),
             #(#variants)*
         }
 
@@ -269,21 +258,10 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         }
 
         #(#attrs)*
-        impl #impl_generics
-            ::std::convert::From<::actify::__private::ClosureJob<#impl_type>>
-            for #call_ty #where_clause
-        {
-            fn from(__actify_job: ::actify::__private::ClosureJob<#impl_type>) -> Self {
-                #call::__ActifyClosure(__actify_job)
-            }
-        }
-
-        #(#attrs)*
         impl #impl_generics ::std::fmt::Debug for #call_ty #where_clause {
             fn fmt(&self, __actify_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 let __actify_variant = match self {
                     #call::__ActifyBuiltin(_) => "Builtin",
-                    #call::__ActifyClosure(_) => "Closure",
                     #(#debug_arms)*
                 };
                 ::std::write!(__actify_f, "{}::{}", #call_name, __actify_variant)
@@ -303,9 +281,6 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
                 match self {
                     #call::__ActifyBuiltin(__actify_builtin) => {
                         ::actify::Dispatch::dispatch(__actify_builtin, __actify_actor).await
-                    }
-                    #call::__ActifyClosure(__actify_job) => {
-                        ::actify::Dispatch::dispatch(__actify_job, __actify_actor).await
                     }
                     #(#arms)*
                 }

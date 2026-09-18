@@ -1,14 +1,10 @@
 use futures_channel::oneshot;
-use std::any::{Any, type_name};
+use std::any::type_name;
 use std::fmt::{self, Debug};
 use std::future::Future;
-use std::pin::Pin;
 use tracing::Instrument;
 
 use crate::channel::JobReceiver;
-
-/// A boxed future, as returned by an actor method.
-pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 use std::panic::Location;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -89,52 +85,6 @@ impl<T> Actor<T> {
             tracing::debug!(
                 actor_type = type_name::<T>(),
                 actor_id = self.id,
-                "Actor failed to respond as the receiver is dropped"
-            );
-        }
-    }
-}
-
-/// A single call on an actor, sent from a handle and run once by [`serve`].
-///
-/// The lifetime is bound with `for<'a>` because the returned future borrows the
-/// actor it was handed.
-pub(crate) type ActorMethod<T> = Box<
-    dyn for<'a> FnOnce(
-            &'a mut Actor<T>,
-            Box<dyn Any + Send + Sync>,
-        ) -> BoxFuture<'a, Box<dyn Any + Send + Sync>>
-        + Send
-        + Sync,
->;
-
-/// A call carried as a closure, which is how the handle's own closure-taking
-/// methods reach the actor.
-///
-/// Every part is `Sync` as well as `Send`, so that a job is `Sync` and the
-/// channel carrying it can be too. A channel's sending half holds the item it
-/// is queueing, so a job that is not `Sync` would leave that half `!Sync`, and
-/// a handle has to be shareable.
-#[doc(hidden)]
-pub struct ClosureJob<T> {
-    pub(crate) call: ActorMethod<T>,
-    pub(crate) args: Box<dyn Any + Send + Sync>,
-    pub(crate) respond_to: oneshot::Sender<Box<dyn Any + Send + Sync>>,
-}
-
-impl<T> Debug for ClosureJob<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ClosureJob<{}>", type_name::<T>())
-    }
-}
-
-impl<T: Send + Sync + 'static> Dispatch<T> for ClosureJob<T> {
-    async fn dispatch(self, actor: &mut Actor<T>) {
-        let res = (self.call)(actor, self.args).await;
-        if self.respond_to.send(res).is_err() {
-            tracing::debug!(
-                actor_type = type_name::<T>(),
-                actor_id = actor.id,
                 "Actor failed to respond as the receiver is dropped"
             );
         }

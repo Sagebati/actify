@@ -157,21 +157,33 @@
 //! }
 //!```
 //!
-//! ## Generics in the method arguments
-//! Generic method parameters are supported when they have appropriate trait bounds.
-//! The type parameters must be `Send + Sync + 'static`:
-//! ```
-//! # use actify::actify;
-//! # use std::fmt::Debug;
-//! # #[derive(Clone, Debug)]
-//! # struct Greeter { }
-//! #[actify]
-//! impl Greeter
-//! {
+//! ## Generics on a method itself
+//! A method cannot declare generic parameters of its own. A call travels as a
+//! variant of the actor's message enum, and that enum has no such parameter to
+//! put the arguments in, so the macro rejects one:
+//! ```compile_fail
+//! # struct Greeter {}
+//! #[actify::actify]
+//! impl Greeter {
 //!     fn apply<F>(&self, value: usize, f: F) -> usize
 //!     where
 //!         F: Fn(usize) -> usize + Send + Sync + 'static,
 //!     {
+//!         f(value)
+//!     }
+//! }
+//! ```
+//!
+//! A concrete function pointer says the same thing for most callers, and a
+//! non-capturing closure coerces to one, so `handle.apply(5, |x| x * 2)` still
+//! compiles:
+//! ```
+//! # use actify::actify;
+//! # #[derive(Clone, Debug)]
+//! # struct Greeter { }
+//! #[actify]
+//! impl Greeter {
+//!     fn apply(&self, value: usize, f: fn(usize) -> usize) -> usize {
 //!         f(value)
 //!     }
 //! }
@@ -181,6 +193,31 @@
 //!     let handle = GreeterHandle::new(Greeter {});
 //!     let result = handle.apply(5, |x| x * 2).await;
 //!     assert_eq!(result, 10);
+//! }
+//!```
+//!
+//! A method's own `where` clause is allowed, and the call carries a pointer to
+//! the method so that the bound is proved where the call is made:
+//! ```
+//! # use actify::actify;
+//! # #[derive(Clone, Debug)]
+//! # struct Sorter { values: Vec<i32> }
+//! #[actify]
+//! impl Sorter {
+//!     fn sorted(&self) -> Vec<i32>
+//!     where
+//!         i32: Ord,
+//!     {
+//!         let mut values = self.values.clone();
+//!         values.sort();
+//!         values
+//!     }
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let handle = SorterHandle::new(Sorter { values: vec![3, 1, 2] });
+//!     assert_eq!(handle.sorted().await, vec![1, 2, 3]);
 //! }
 //!```
 //!
@@ -266,9 +303,10 @@
 //! - [`Handle::get`]: returns the actor's view, which for a plain `Clone` actor is a
 //!   clone of the value itself
 //! - [`Handle::set`]: overwrites the actor value
-//! - [`Handle::with`]: runs a read-only closure on `&T`, the actor type rather than
-//!   its view
-//! - [`Handle::with_mut`]: runs a mutable closure on `&mut T`
+//!
+//! Reading part of an actor without cloning all of it, or changing it in
+//! place, is what an `#[actify]` method is for. A handle takes no closures: a
+//! call travels to the actor as data, and a closure is not data.
 //!
 //! # Leaving methods off the handle
 //!
@@ -341,21 +379,21 @@
 //!
 //! # ReadHandle
 //!
-//! A [`ReadHandle`] is a read-only view of an actor. It supports [`get`](ReadHandle::get),
-//! and [`with`](ReadHandle::with), but cannot mutate the actor. Obtain one via
+//! A [`ReadHandle`] is a read-only view of an actor. It supports
+//! [`get`](ReadHandle::get) but cannot mutate the actor. Obtain one via
 //! [`Handle::read_handle`].
 //!
-//! # Extension traits
+//! # Handles for standard library types
 //!
-//! Actify ships with extension traits that add convenience methods to handles
-//! wrapping common standard library types:
+//! Actify ships handles for common standard library types, generated from an
+//! `#[actify]` block the same way your own are:
 //!
-//! - [`OptionHandle`] for `Handle<Option<T>>`
-//! - [`VecHandle`] for `Handle<Vec<T>>`
-//! - [`HashMapHandle`] for `Handle<HashMap<K, V>>`
-//! - [`HashSetHandle`] for `Handle<HashSet<K>>`
-//! - [`StringHandle`] for `Handle<String>`
-//! - [`VecDequeHandle`] for `Handle<VecDeque<T>>`
+//! - [`OptionHandle`] for an `Option<T>` actor
+//! - [`VecHandle`] for a `Vec<T>` actor
+//! - [`HashMapHandle`] for a `HashMap<K, V>` actor
+//! - [`HashSetHandle`] for a `HashSet<K>` actor
+//! - [`StringHandle`] for a `String` actor
+//! - [`VecDequeHandle`] for a `VecDeque<T>` actor
 //!
 //! # Views and non-Clone types
 //!
@@ -365,9 +403,8 @@
 //!
 //! For a non-Clone type, or to expose a summary instead of the whole value,
 //! implement [`ToView<V>`] for a Clone-able `V` and name it explicitly:
-//! `Handle::<MyType, Summary>::new(val)`. Reads then return the summary, and
-//! [`Handle::with`] reads the actor type itself. Your `#[actify]` methods work
-//! normally either way.
+//! `Handle::<MyType, Summary>::new(val)`. Reads then return the summary, and an
+//! `#[actify]` method is what reaches past it to the actor type itself.
 //!
 //! # Execution model
 //!
@@ -496,7 +533,7 @@ pub use message::{Builtin, Job};
 /// only generated code names it.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::actor::{Actor, ClosureJob, Reply, reply};
+    pub use crate::actor::{Actor, Reply, reply};
     pub use crate::handles::builder;
     #[cfg(feature = "tokio")]
     pub use crate::handles::spawn;

@@ -5,8 +5,7 @@ use super::handle::{Handle, ToView};
 
 /// A clonable read-only handle that can only be used to read the internal value.
 ///
-/// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`],
-/// and [`ReadHandle::with`].
+/// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`].
 pub struct ReadHandle<T, V = T, M = crate::message::Job<T, V>, S = crate::handles::DefaultSender<M>>(
     Handle<T, V, M, S>,
 );
@@ -32,60 +31,6 @@ impl<T, V, M, S> Debug for ReadHandle<T, V, M, S> {
 impl<T, V, M, S> ReadHandle<T, V, M, S> {
     pub(super) fn new(handle: Handle<T, V, M, S>) -> Self {
         ReadHandle(handle)
-    }
-}
-
-impl<T, V, M, S> ReadHandle<T, V, M, S>
-where
-    T: Send + Sync + 'static,
-    M: From<crate::actor::ClosureJob<T>> + Send + 'static,
-    S: crate::channel::JobSender<M>,
-{
-    /// Runs a read-only closure on the actor's value and returns the result.
-    ///
-    /// Unlike [`ReadHandle::get`], which returns the view, this reads the actor
-    /// type itself.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::{Handle, ToView};
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// // A non-Clone type, so its view is a separate type
-    /// struct Inventory { items: Vec<String> }
-    ///
-    /// #[derive(Clone, Debug)]
-    /// struct Count(usize);
-    ///
-    /// impl ToView<Count> for Inventory {
-    ///     fn to_view(&self) -> Count { Count(self.items.len()) }
-    /// }
-    ///
-    /// let handle: Handle<Inventory, Count> = Handle::new(Inventory {
-    ///     items: vec!["sword".into(), "shield".into()],
-    /// });
-    /// let read_handle = handle.read_handle();
-    ///
-    /// let count = read_handle.with(|inv| inv.items.len()).await;
-    /// assert_eq!(count, 2);
-    ///
-    /// let first = read_handle.with(|inv| inv.items[0].clone()).await;
-    /// assert_eq!(first, "sword");
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn with<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R + Send + Sync + 'static,
-        R: Send + Sync + 'static,
-    {
-        self.0.with(f).await
     }
 }
 

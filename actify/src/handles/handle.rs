@@ -1,5 +1,4 @@
 use futures_channel::oneshot;
-use std::any::Any;
 use std::any::type_name;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
@@ -7,7 +6,7 @@ use std::sync::Arc;
 
 use super::builder::HandleBuilder;
 use super::read_handle::ReadHandle;
-use crate::actor::{Actor, ActorMethod, ClosureJob, reply};
+use crate::actor::reply;
 use crate::channel::JobSender;
 use crate::message::{Builtin, Job};
 
@@ -17,8 +16,6 @@ use crate::message::{Builtin, Job};
 fn report_actor_gone<T>() -> ! {
     panic!("Actor of type {} is no longer running", type_name::<T>());
 }
-const DOWNCAST_FAIL: &str =
-    "Actify Macro error: failed to downcast arguments to their concrete type";
 
 /// Defines the view an actor exposes: the type `V` that [`Handle::get`]
 /// returns.
@@ -29,8 +26,6 @@ const DOWNCAST_FAIL: &str =
 ///
 /// - Non-Clone types to be read
 /// - Clone types to expose a lightweight summary instead of the full value
-///
-/// [`Handle::with`] reads the actor type itself either way.
 ///
 /// # Examples
 ///
@@ -64,17 +59,18 @@ impl<T: Clone> ToView<T> for T {
     }
 }
 
-/// A clonable handle that can be used to remotely execute a closure on the corresponding [`Actor`].
+/// A clonable handle to an actor with no `#[actify]` block of its own, so the
+/// calls it carries are the built-in ones.
 ///
-/// Handles are the primary way to interact with actors. Cloning a handle shares
-/// access to the same actor across tasks. For read-only access, see
-/// [`ReadHandle`].
+/// Cloning it shares access to the same actor across tasks. For read-only
+/// access, see [`ReadHandle`]. An actor with an `#[actify]` block has a handle
+/// of its own, generated beside its message type, which carries its methods
+/// as well as these.
 ///
 /// The second type parameter `V` is the view the handle exposes: what
 /// [`Handle::get`] returns. By default `V = T`, so a read is a clone of the
 /// actor itself. To expose a different type, implement [`ToView<V>`] and
 /// specify `V` explicitly (e.g. `Handle::<MyType, Summary>::new(val)`).
-/// [`Handle::with`] always reads the actor type.
 pub struct Handle<T, V = T, M = Job<T, V>, S = DefaultSender<M>> {
     // The `Arc` is what makes a handle one pointer wide and what stops the
     // actor: the last handle to drop drops the only sending half with it.
@@ -129,8 +125,7 @@ where
     T: ToView<V> + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Creates a new [`Handle`] and spawns the corresponding [`Actor`] on
-    /// Tokio.
+    /// Creates a new [`Handle`] and spawns its actor on Tokio.
     ///
     /// The Tokio spelling of [`Handle::builder`] followed by a
     /// `tokio::spawn`, behind the default `tokio` feature. Turn that feature
@@ -195,9 +190,8 @@ where
     /// Returns the actor's current view.
     ///
     /// For a `Clone` actor type without a [`ToView`] implementation of its own,
-    /// `V` is the actor type and this is a clone of the whole value. Otherwise it
-    /// is whatever [`ToView::to_view`] produces, and [`Handle::with`] reads the
-    /// actor value itself.
+    /// `V` is the actor type and this is a clone of the whole value. Otherwise
+    /// it is whatever [`ToView::to_view`] produces.
     ///
     /// # Examples
     ///
@@ -279,120 +273,6 @@ where
             }
         }
         report_actor_gone::<T>()
-    }
-}
-
-impl<T, V, M, S> Handle<T, V, M, S>
-where
-    T: Send + Sync + 'static,
-    M: From<ClosureJob<T>> + Send + 'static,
-    S: JobSender<M>,
-{
-    #[doc(hidden)]
-    pub async fn __send_job(
-        &self,
-        call: ActorMethod<T>,
-        args: Box<dyn Any + Send + Sync>,
-    ) -> Box<dyn Any + Send + Sync> {
-        let (respond_to, get_result) = oneshot::channel();
-        let job = ClosureJob {
-            call,
-            args,
-            respond_to,
-        };
-        self.__call(job.into(), get_result).await
-    }
-
-    /// Sends a closure to the actor, handling all boxing/unboxing internally.
-    async fn run<F, A, R>(&self, args: A, f: F) -> R
-    where
-        F: FnOnce(&mut Actor<T>, A) -> R + Send + Sync + 'static,
-        A: Send + Sync + 'static,
-        R: Send + Sync + 'static,
-    {
-        let res = self
-            .__send_job(
-                Box::new(
-                    move |s: &mut Actor<T>, boxed_args: Box<dyn Any + Send + Sync>| {
-                        Box::pin(async move {
-                            let args = *boxed_args.downcast::<A>().expect(DOWNCAST_FAIL);
-                            Box::new(f(s, args)) as Box<dyn Any + Send + Sync>
-                        })
-                    },
-                ),
-                Box::new(args),
-            )
-            .await;
-        *res.downcast::<R>().expect(DOWNCAST_FAIL)
-    }
-
-    /// Runs a read-only closure on the actor's value and returns the result.
-    ///
-    /// This reads parts of the actor state without cloning the entire value,
-    /// and works with non-Clone types.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(vec![1, 2, 3]);
-    ///
-    /// let len = handle.with(|v| v.len()).await;
-    /// assert_eq!(len, 3);
-    ///
-    /// let first = handle.with(|v| v.first().copied()).await;
-    /// assert_eq!(first, Some(1));
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn with<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R + Send + Sync + 'static,
-        R: Send + Sync + 'static,
-    {
-        self.run(f, |s, f| f(&s.inner)).await
-    }
-
-    /// Runs a closure on the actor's value mutably and returns the result.
-    ///
-    /// This performs an atomic read-modify-return without a dedicated
-    /// `#[actify]` method.
-    ///
-    /// [`Handle::with`] is the read-only counterpart.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(vec![1, 2, 3]);
-    ///
-    /// // Mutate and return a result in one atomic operation
-    /// let popped = handle.with_mut(|v| v.pop()).await;
-    /// assert_eq!(popped, Some(3));
-    /// assert_eq!(handle.get().await, vec![1, 2]);
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn with_mut<R, F>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut T) -> R + Send + Sync + 'static,
-        R: Send + Sync + 'static,
-    {
-        self.run(f, |s, f| f(&mut s.inner)).await
     }
 }
 
@@ -548,8 +428,8 @@ mod tests {
     mod views {
         use super::*;
 
-        fn big() -> Handle<BigState, usize> {
-            Handle::new(BigState {
+        fn big() -> BigStateHandle<usize> {
+            BigStateHandle::<usize>::new(BigState {
                 data: vec![1, 2, 3],
                 count: 7,
             })
@@ -568,11 +448,12 @@ mod tests {
             assert_eq!(handle.read_handle().get().await, 1);
         }
 
+        /// The view hides the state, so a method is what reaches past it.
         #[tokio::test]
-        async fn test_the_state_stays_reachable_through_with() {
+        async fn test_the_state_stays_reachable_through_a_method() {
             let handle = big();
 
-            assert_eq!(handle.with(|state| state.data.clone()).await, vec![1, 2, 3]);
+            assert_eq!(handle.data().await, vec![1, 2, 3]);
         }
     }
 
@@ -757,6 +638,19 @@ mod tests {
         count: usize,
     }
 
+    /// Reading part of an actor without cloning all of it is what an
+    /// `#[actify]` method is for, now that no handle takes a closure.
+    #[actify_macros::actify]
+    impl BigState {
+        fn data(&self) -> Vec<u8> {
+            self.data.clone()
+        }
+
+        fn state(&self) -> BigState {
+            self.clone()
+        }
+    }
+
     impl ToView<usize> for BigState {
         fn to_view(&self) -> usize {
             self.count
@@ -782,7 +676,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clone_actor_with_custom_view() {
-        let handle: Handle<BigState, usize> = Handle::new(BigState {
+        let handle = BigStateHandle::<usize>::new(BigState {
             data: vec![1, 2, 3],
             count: 3,
         });
@@ -796,6 +690,6 @@ mod tests {
         handle.set(updated.clone()).await;
 
         assert_eq!(handle.get().await, 4);
-        assert_eq!(handle.with(|state| state.clone()).await, updated);
+        assert_eq!(handle.state().await, updated);
     }
 }

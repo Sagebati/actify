@@ -148,6 +148,10 @@ impl MethodInfo {
             accumulate(&mut errors, error);
         }
 
+        if let Err(error) = validate_method_generics(method) {
+            accumulate(&mut errors, error);
+        }
+
         if let Err(error) = validate_receiver(method) {
             accumulate(&mut errors, error);
         }
@@ -298,6 +302,39 @@ fn validate_signature_modifiers(method: &ImplItemFn) -> syn::Result<()> {
         return Err(Error::new(
             unsafety.span,
             "Unsafe methods cannot be actified: the generated handle would call them from safe code, so the safety contract could not be upheld",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate that a call on this method can travel as a message.
+///
+/// A call is a variant of the actor's message enum, which takes the impl
+/// block's parameters and nothing else, so a method's own generics have
+/// nowhere to live. A `where` clause is allowed instead: the variant carries a
+/// pointer to the method, built where the bound is in scope. That trick needs
+/// the method to return its result rather than a future, so an async method
+/// cannot use it.
+fn validate_method_generics(method: &ImplItemFn) -> syn::Result<()> {
+    if let Some(param) = method.sig.generics.params.first() {
+        return Err(Error::new_spanned(
+            param,
+            "Actor methods cannot declare generic parameters of their own: a call travels as a variant of the actor's message enum, which has no such parameter to hold the arguments (use a concrete type, e.g. fn(usize) -> usize rather than F: Fn(usize) -> usize)",
+        ));
+    }
+
+    let bounded = method
+        .sig
+        .generics
+        .where_clause
+        .as_ref()
+        .is_some_and(|clause| !clause.predicates.is_empty());
+
+    if bounded && method.sig.asyncness.is_some() {
+        return Err(Error::new_spanned(
+            method.sig.generics.where_clause.as_ref().unwrap(),
+            "An async actor method cannot carry a where clause of its own: the call would have to reach it through a function pointer, and one to an async method returns a future the message cannot hold",
         ));
     }
 
