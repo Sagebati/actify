@@ -23,10 +23,6 @@ trait ActorSet<K> {
 
     fn extend(&mut self, items: Vec<K>);
 
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&K) -> bool + Send + Sync + 'static;
-
     fn difference(&self, other: HashSet<K>) -> Vec<K>;
 
     fn intersection(&self, other: HashSet<K>) -> Vec<K>;
@@ -223,28 +219,6 @@ where
         <Self as Extend<K>>::extend(self, items)
     }
 
-    /// Retains only the elements specified by the predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::HashSetHandle;
-    /// # use std::collections::HashSet;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
-    /// handle.extend(vec![1, 2, 3, 4]).await;
-    /// handle.retain(|x| *x > 2).await;
-    /// assert_eq!(handle.len().await, 2);
-    /// # }
-    /// ```
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&K) -> bool + Send + Sync + 'static,
-    {
-        self.retain(f)
-    }
-
     /// Returns the elements that are in `self` but not in `other` as a `Vec`.
     ///
     /// # Examples
@@ -416,6 +390,8 @@ mod tests {
         values
     }
 
+    /// The set algebra returns owned vectors, since an iterator borrowing the
+    /// actor cannot leave it.
     #[tokio::test]
     async fn test_membership_changes() {
         let handle = set();
@@ -423,22 +399,17 @@ mod tests {
         assert!(handle.remove(1).await, "removing a member reports true");
         assert!(
             !handle.remove(1).await,
-            "removing a non-member reports false"
+            "removing what is no longer there reports false"
         );
         assert_eq!(sorted(handle.to_vec().await), vec![2, 3]);
 
         handle.extend(vec![3, 4]).await;
         assert_eq!(sorted(handle.to_vec().await), vec![2, 3, 4]);
 
-        handle.retain(|value: &i32| *value > 2).await;
-        assert_eq!(sorted(handle.to_vec().await), vec![3, 4]);
-
-        assert_eq!(sorted(handle.drain().await), vec![3, 4]);
+        assert_eq!(sorted(handle.drain().await), vec![2, 3, 4]);
         assert!(handle.is_empty().await);
     }
 
-    /// The set algebra returns owned vectors, since an iterator borrowing the
-    /// actor cannot leave it.
     #[tokio::test]
     async fn test_set_algebra() {
         let handle = set();

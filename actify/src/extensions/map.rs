@@ -27,19 +27,7 @@ trait ActorMap<K, V> {
 
     fn extend(&mut self, items: Vec<(K, V)>);
 
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&K, &mut V) -> bool + Send + Sync + 'static;
-
-    fn get_or_insert_with<F>(&mut self, key: K, default: F) -> V
-    where
-        F: FnOnce() -> V + Send + Sync + 'static;
-
     fn remove_entry(&mut self, key: K) -> Option<(K, V)>;
-
-    fn modify<F>(&mut self, key: K, f: F) -> bool
-    where
-        F: FnOnce(&mut V) + Send + Sync + 'static;
 }
 
 /// Methods on [`HashMapHandle`](crate::HashMapHandle), for an actor holding a `HashMap<K, V>>`, exposed as [`HashMapHandle`](crate::HashMapHandle).
@@ -274,52 +262,6 @@ where
         <Self as Extend<(K, V)>>::extend(self, items)
     }
 
-    /// Retains only the elements specified by the predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::HashMapHandle;
-    /// # use std::collections::HashMap;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
-    /// handle.extend(vec![("a", 1), ("b", 2), ("c", 3)]).await;
-    /// handle.retain(|_k, v| *v > 1).await;
-    /// assert_eq!(handle.len().await, 2);
-    /// # }
-    /// ```
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&K, &mut V) -> bool + Send + Sync + 'static,
-    {
-        self.retain(f)
-    }
-
-    /// Returns a clone of the value for the given key. If the key is not present,
-    /// inserts the value computed by `default` and returns a clone of it.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::HashMapHandle;
-    /// # use std::collections::HashMap;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::<&str, i32>::new());
-    /// let val = handle.get_or_insert_with("a", || 42).await;
-    /// assert_eq!(val, 42);
-    /// let val = handle.get_or_insert_with("a", || 99).await;
-    /// assert_eq!(val, 42);
-    /// # }
-    /// ```
-    fn get_or_insert_with<F>(&mut self, key: K, default: F) -> V
-    where
-        F: FnOnce() -> V + Send + Sync + 'static,
-    {
-        self.entry(key).or_insert_with(default).clone()
-    }
-
     /// Removes the entry for `key` and returns both halves of it, or `None` if the
     /// map holds no such key.
     ///
@@ -341,37 +283,6 @@ where
     /// ```
     fn remove_entry(&mut self, key: K) -> Option<(K, V)> {
         self.remove_entry(&key)
-    }
-
-    /// Applies `f` to the value stored under `key`, and returns whether there was
-    /// one to apply it to.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::HashMapHandle;
-    /// # use std::collections::HashMap;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::from([("a", 1)]));
-    ///
-    /// assert!(handle.modify("a", |v| *v += 10).await);
-    /// assert_eq!(handle.get_key("a").await, Some(11));
-    ///
-    /// assert!(!handle.modify("b", |v| *v += 10).await);
-    /// # }
-    /// ```
-    fn modify<F>(&mut self, key: K, f: F) -> bool
-    where
-        F: FnOnce(&mut V) + Send + Sync + 'static,
-    {
-        match self.get_mut(&key) {
-            Some(value) => {
-                f(value);
-                true
-            }
-            None => false,
-        }
     }
 }
 
@@ -407,23 +318,6 @@ mod tests {
         assert_eq!(handle.get_key("c".to_string()).await, Some(3));
     }
 
-    #[tokio::test]
-    async fn test_retain_keeps_what_the_predicate_accepts() {
-        let handle = map();
-
-        handle.retain(|_, value: &mut i32| *value > 1).await;
-
-        assert_eq!(handle.keys().await, vec!["b".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn test_get_or_insert_with_only_inserts_when_absent() {
-        let handle = map();
-
-        assert_eq!(handle.get_or_insert_with("a".to_string(), || 99).await, 1);
-        assert_eq!(handle.get_or_insert_with("c".to_string(), || 3).await, 3);
-        assert_eq!(handle.len().await, 3);
-    }
     /// `Eq` and `Hash` read only the id, so two keys can be equal while carrying
     /// different labels. Without that, nothing shows which key `remove_entry`
     /// hands back.
@@ -465,25 +359,5 @@ mod tests {
         assert!(handle.is_empty().await);
 
         assert!(handle.remove_entry(lookup).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_modify_changes_an_existing_value_and_inserts_nothing() {
-        let handle = map();
-
-        assert!(
-            handle
-                .modify("a".to_string(), |value: &mut i32| *value += 10)
-                .await
-        );
-        assert_eq!(handle.get_key("a".to_string()).await, Some(11));
-        assert_eq!(handle.get_key("b".to_string()).await, Some(2));
-
-        assert!(
-            !handle
-                .modify("z".to_string(), |value: &mut i32| *value += 10)
-                .await
-        );
-        assert_eq!(handle.len().await, 2);
     }
 }

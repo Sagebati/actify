@@ -16,27 +16,6 @@ trait ActorOption<T> {
     fn unwrap_or_default(&self) -> T
     where
         T: Default;
-
-    fn unwrap_or_else<F>(&self, f: F) -> T
-    where
-        F: FnOnce() -> T + Send + Sync + 'static;
-
-    fn filter<F>(&self, predicate: F) -> Option<T>
-    where
-        F: FnOnce(&T) -> bool + Send + Sync + 'static;
-
-    fn map<F, U>(&self, f: F) -> Option<U>
-    where
-        F: FnOnce(T) -> U + Send + Sync + 'static,
-        U: Send + Sync + 'static;
-
-    fn take_if<F>(&mut self, predicate: F) -> Option<T>
-    where
-        F: FnOnce(&mut T) -> bool + Send + Sync + 'static;
-
-    fn get_or_insert_with<F>(&mut self, f: F) -> T
-    where
-        F: FnOnce() -> T + Send + Sync + 'static;
 }
 
 /// Methods on [`OptionHandle`](crate::OptionHandle), for an actor holding a `Option<T>>`, exposed as [`OptionHandle`](crate::OptionHandle).
@@ -148,115 +127,6 @@ where
     {
         self.clone().unwrap_or_default()
     }
-
-    /// Returns the contained value or computes it from a closure.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::OptionHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = OptionHandle::new(Option::<i32>::None);
-    /// assert_eq!(handle.unwrap_or_else(|| 42).await, 42);
-    /// # }
-    /// ```
-    fn unwrap_or_else<F>(&self, f: F) -> T
-    where
-        F: FnOnce() -> T + Send + Sync + 'static,
-    {
-        self.clone().unwrap_or_else(f)
-    }
-
-    /// Returns `None` if the option is `None`, otherwise calls `predicate`
-    /// with the contained value and returns `Some(value)` if the predicate
-    /// returns `true`, or `None` if it returns `false`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::OptionHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = OptionHandle::new(Some(4));
-    /// assert_eq!(handle.filter(|x| *x > 3).await, Some(4));
-    /// assert_eq!(handle.filter(|x| *x > 5).await, None);
-    /// # }
-    /// ```
-    fn filter<F>(&self, predicate: F) -> Option<T>
-    where
-        F: FnOnce(&T) -> bool + Send + Sync + 'static,
-    {
-        self.clone().filter(predicate)
-    }
-
-    /// Maps an `Option<T>` to `Option<U>` by applying a function to a contained value
-    /// (if `Some`) or returns `None` (if `None`).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::OptionHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = OptionHandle::new(Some(3));
-    /// let doubled: Option<i32> = handle.map(|x| x * 2).await;
-    /// assert_eq!(doubled, Some(6));
-    /// # }
-    /// ```
-    fn map<F, U>(&self, f: F) -> Option<U>
-    where
-        F: FnOnce(T) -> U + Send + Sync + 'static,
-        U: Send + Sync + 'static,
-    {
-        self.clone().map(f)
-    }
-
-    /// Takes the value out and returns it if the predicate accepts it, and leaves
-    /// the option alone otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::OptionHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = OptionHandle::new(Some(2));
-    /// assert_eq!(handle.take_if(|v| *v == 9).await, None);
-    /// assert_eq!(handle.get().await, Some(2));
-    ///
-    /// assert_eq!(handle.take_if(|v| *v == 2).await, Some(2));
-    /// assert_eq!(handle.get().await, None);
-    /// # }
-    /// ```
-    fn take_if<F>(&mut self, predicate: F) -> Option<T>
-    where
-        F: FnOnce(&mut T) -> bool + Send + Sync + 'static,
-    {
-        self.take_if(predicate)
-    }
-
-    /// Returns the contained value, inserting the result of `f` first if there is
-    /// none.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::OptionHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = OptionHandle::new(None);
-    /// assert_eq!(handle.get_or_insert_with(|| 2).await, 2);
-    /// assert_eq!(handle.get_or_insert_with(|| 9).await, 2);
-    /// assert_eq!(handle.get().await, Some(2));
-    /// # }
-    /// ```
-    fn get_or_insert_with<F>(&mut self, f: F) -> T
-    where
-        F: FnOnce() -> T + Send + Sync + 'static,
-    {
-        self.get_or_insert_with(f).clone()
-    }
 }
 
 #[cfg(test)]
@@ -269,33 +139,7 @@ mod tests {
 
         assert_eq!(handle.unwrap_or(9).await, 9);
         assert_eq!(handle.unwrap_or_default().await, 0);
-        assert_eq!(handle.unwrap_or_else(|| 7).await, 7);
-
-        // A default must not be written back
         assert!(handle.is_none().await);
-    }
-
-    #[tokio::test]
-    async fn test_filter_and_map_on_none() {
-        let handle: OptionHandle<i32> = OptionHandle::new(None);
-
-        assert_eq!(handle.filter(|_: &i32| true).await, None);
-        assert_eq!(handle.map(|value: i32| value * 2).await, None);
-    }
-
-    #[tokio::test]
-    async fn test_filter_rejects_and_map_changes_type() {
-        let handle = OptionHandle::new(Some(3));
-
-        assert_eq!(handle.filter(|value: &i32| *value > 5).await, None);
-        assert_eq!(handle.filter(|value: &i32| *value > 1).await, Some(3));
-        assert_eq!(
-            handle.map(|value: i32| value.to_string()).await,
-            Some("3".to_string())
-        );
-
-        // Reading left the actor as it was
-        assert_eq!(handle.get().await, Some(3));
     }
 
     #[tokio::test]
@@ -304,27 +148,5 @@ mod tests {
 
         assert_eq!(handle.take().await, None);
         assert!(handle.is_none().await);
-    }
-
-    #[tokio::test]
-    async fn test_take_if_only_takes_what_the_predicate_accepts() {
-        let handle = OptionHandle::new(Some(2));
-
-        assert_eq!(handle.take_if(|value: &mut i32| *value == 9).await, None);
-        assert_eq!(handle.get().await, Some(2));
-
-        assert_eq!(handle.take_if(|value: &mut i32| *value == 2).await, Some(2));
-        assert_eq!(handle.get().await, None);
-
-        assert_eq!(handle.take_if(|_: &mut i32| true).await, None);
-    }
-
-    #[tokio::test]
-    async fn test_get_or_insert_with_only_inserts_when_none() {
-        let handle: OptionHandle<i32> = OptionHandle::new(None);
-
-        assert_eq!(handle.get_or_insert_with(|| 2).await, 2);
-        assert_eq!(handle.get_or_insert_with(|| 9).await, 2);
-        assert_eq!(handle.get().await, Some(2));
     }
 }

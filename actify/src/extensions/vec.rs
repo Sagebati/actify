@@ -1,5 +1,4 @@
 use actify_macros::actify;
-use core::cmp::Ordering;
 use core::ops::RangeBounds;
 
 /// An extension trait for `Vec<T>` actors, made available on the [`Handle`](crate::Handle)
@@ -50,18 +49,6 @@ trait ActorVec<T> {
     fn sort(&mut self)
     where
         T: Ord;
-
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&T) -> bool + Send + Sync + 'static;
-
-    fn sort_by<F>(&mut self, compare: F)
-    where
-        F: FnMut(&T, &T) -> Ordering + Send + Sync + 'static;
-
-    fn retain_mut<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut T) -> bool + Send + Sync + 'static;
 
     fn swap(&mut self, a: usize, b: usize);
 
@@ -433,67 +420,6 @@ where
         self.as_mut_slice().sort()
     }
 
-    /// Retains only the elements specified by the predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::VecHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
-    /// handle.retain(|x| *x > 2).await;
-    /// assert_eq!(handle.get().await, vec![3, 4, 5]);
-    /// # }
-    /// ```
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&T) -> bool + Send + Sync + 'static,
-    {
-        self.retain(f)
-    }
-
-    /// Sorts the vector with a comparator function.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::VecHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = VecHandle::new(vec![3, 1, 2]);
-    /// handle.sort_by(|a, b| b.cmp(a)).await;
-    /// assert_eq!(handle.get().await, vec![3, 2, 1]);
-    /// # }
-    /// ```
-    fn sort_by<F>(&mut self, compare: F)
-    where
-        F: FnMut(&T, &T) -> Ordering + Send + Sync + 'static,
-    {
-        self.as_mut_slice().sort_by(compare)
-    }
-
-    /// Keeps only the elements the predicate accepts, and lets it change the ones
-    /// it keeps.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::VecHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3, 4]);
-    /// handle.retain_mut(|x| { *x *= 10; *x > 20 }).await;
-    /// assert_eq!(handle.get().await, vec![30, 40]);
-    /// # }
-    /// ```
-    fn retain_mut<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut T) -> bool + Send + Sync + 'static,
-    {
-        self.retain_mut(f)
-    }
-
     /// Swaps the elements at the two given indices.
     ///
     /// # Panics
@@ -578,7 +504,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ordering_and_dedup() {
+    async fn test_sort_orders_and_dedup_collapses_neighbours() {
         let handle = VecHandle::new(vec![3, 1, 2, 2]);
 
         handle.sort().await;
@@ -586,16 +512,10 @@ mod tests {
 
         handle.dedup().await;
         assert_eq!(handle.get().await, vec![1, 2, 3]);
-
-        handle.sort_by(|a: &i32, b: &i32| b.cmp(a)).await;
-        assert_eq!(handle.get().await, vec![3, 2, 1]);
-
-        handle.reverse().await;
-        assert_eq!(handle.get().await, vec![1, 2, 3]);
     }
 
     #[tokio::test]
-    async fn test_insert_extend_retain_and_truncate() {
+    async fn test_insert_extend_and_truncate() {
         let handle = VecHandle::new(vec![1, 2]);
 
         handle.insert(1, 9).await;
@@ -604,29 +524,8 @@ mod tests {
         handle.extend(vec![3, 4]).await;
         assert_eq!(handle.get().await, vec![1, 9, 2, 3, 4]);
 
-        handle.retain(|value: &i32| *value < 4).await;
-        assert_eq!(handle.get().await, vec![1, 2, 3]);
-
         handle.truncate(2).await;
-        assert_eq!(handle.get().await, vec![1, 2]);
-
-        handle.clear().await;
-        assert!(handle.is_empty().await);
-    }
-
-    /// The predicate changes every element it sees, so a `retain` in disguise
-    /// would leave the kept values untouched and fail here.
-    #[tokio::test]
-    async fn test_retain_mut_can_change_what_it_keeps() {
-        let handle = VecHandle::new(vec![1, 2, 3, 4]);
-
-        handle
-            .retain_mut(|value: &mut i32| {
-                *value *= 10;
-                *value > 20
-            })
-            .await;
-        assert_eq!(handle.get().await, vec![30, 40]);
+        assert_eq!(handle.get().await, vec![1, 9]);
     }
 
     #[tokio::test]

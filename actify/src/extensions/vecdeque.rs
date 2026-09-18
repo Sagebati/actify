@@ -33,10 +33,6 @@ trait ActorVecDeque<T> {
     where
         R: RangeBounds<usize> + Send + Sync + 'static;
 
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&T) -> bool + Send + Sync + 'static;
-
     fn insert(&mut self, index: usize, value: T);
 
     fn remove(&mut self, index: usize) -> Option<T>;
@@ -48,10 +44,6 @@ trait ActorVecDeque<T> {
     fn extend(&mut self, items: VecDeque<T>);
 
     fn split_off(&mut self, at: usize) -> VecDeque<T>;
-
-    fn retain_mut<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut T) -> bool + Send + Sync + 'static;
 
     fn resize(&mut self, new_len: usize, value: T);
 }
@@ -287,27 +279,6 @@ where
         self.drain(range).collect()
     }
 
-    /// Retains only the elements specified by the predicate.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::VecDequeHandle;
-    /// # use std::collections::VecDeque;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3, 4, 5]));
-    /// handle.retain(|x| *x > 2).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([3, 4, 5]));
-    /// # }
-    /// ```
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&T) -> bool + Send + Sync + 'static,
-    {
-        self.retain(f)
-    }
-
     /// Inserts an element at `index`, shifting every later element towards the back.
     ///
     /// # Panics
@@ -431,28 +402,6 @@ where
         self.split_off(at)
     }
 
-    /// Keeps only the elements the predicate accepts, and lets it change the ones
-    /// it keeps.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::VecDequeHandle;
-    /// # use std::collections::VecDeque;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3, 4]));
-    /// handle.retain_mut(|x| { *x *= 10; *x > 20 }).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([30, 40]));
-    /// # }
-    /// ```
-    fn retain_mut<F>(&mut self, f: F)
-    where
-        F: FnMut(&mut T) -> bool + Send + Sync + 'static,
-    {
-        self.retain_mut(f)
-    }
-
     /// Resizes the deque to the given length, dropping the surplus or filling
     /// the shortfall with clones of `value`.
     ///
@@ -515,17 +464,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_drain_and_retain_remove_in_place() {
-        let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3, 4, 5]));
-
-        assert_eq!(handle.drain(1..3).await, vec![2, 3]);
-        assert_eq!(handle.get().await, VecDeque::from([1, 4, 5]));
-
-        handle.retain(|value: &i32| value % 2 == 1).await;
-        assert_eq!(handle.get().await, VecDeque::from([1, 5]));
-    }
-
-    #[tokio::test]
     async fn test_positions_move_the_right_element() {
         let handle = deque();
 
@@ -539,6 +477,14 @@ mod tests {
         assert_eq!(handle.get().await, VecDeque::from([9, 1, 3]));
 
         assert_eq!(handle.remove(9).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_drain_removes_a_range_in_place() {
+        let handle = deque();
+
+        assert_eq!(handle.drain(1..3).await, vec![2, 3]);
+        assert_eq!(handle.get().await, VecDeque::from([1]));
     }
 
     #[tokio::test]
@@ -564,18 +510,5 @@ mod tests {
 
         handle.resize(2, 0).await;
         assert_eq!(handle.get().await, VecDeque::from([1, 2]));
-    }
-
-    #[tokio::test]
-    async fn test_retain_mut_can_change_what_it_keeps() {
-        let handle = VecDequeHandle::new(VecDeque::from([1, 2, 3, 4]));
-
-        handle
-            .retain_mut(|x: &mut i32| {
-                *x *= 10;
-                *x > 20
-            })
-            .await;
-        assert_eq!(handle.get().await, VecDeque::from([30, 40]));
     }
 }

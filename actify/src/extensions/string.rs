@@ -40,10 +40,6 @@ trait ActorString {
 
     fn insert_str(&mut self, idx: usize, string: String);
 
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(char) -> bool + Send + Sync + 'static;
-
     fn drain<R>(&mut self, range: R) -> String
     where
         R: RangeBounds<usize> + Send + Sync + 'static;
@@ -379,26 +375,6 @@ impl ActorString for String {
         self.insert_str(idx, &string)
     }
 
-    /// Keeps only the characters the predicate accepts, in order.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::StringHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = StringHandle::new("a1b2".to_string());
-    /// handle.retain(|c| c.is_alphabetic()).await;
-    /// assert_eq!(handle.get().await, "ab");
-    /// # }
-    /// ```
-    fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(char) -> bool + Send + Sync + 'static,
-    {
-        self.retain(f)
-    }
-
     /// Removes the given byte range from the string and returns it as a new `String`.
     ///
     /// # Panics
@@ -553,13 +529,5 @@ mod tests {
 
         handle.replace_range(1..3, "xyz".to_string()).await;
         assert_eq!(handle.get().await, "axyzd");
-    }
-
-    #[tokio::test]
-    async fn test_retain_keeps_what_the_predicate_accepts() {
-        let handle = StringHandle::new("a1b2c3".to_string());
-
-        handle.retain(|c: char| c.is_ascii_digit()).await;
-        assert_eq!(handle.get().await, "123");
     }
 }
