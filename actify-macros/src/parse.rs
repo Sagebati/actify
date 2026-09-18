@@ -306,10 +306,10 @@ fn validate_return_type(ty: &Type) -> syn::Result<()> {
         // `&'static T` outlives the actor and boxes fine. Any other borrow is
         // tied to the actor's state and cannot leave the task with the result.
         Type::Reference(reference)
-            if !reference
+            if reference
                 .lifetime
                 .as_ref()
-                .is_some_and(|lifetime| lifetime.ident == "static") =>
+                .is_none_or(|lifetime| lifetime.ident != "static") =>
         {
             Err(Error::new_spanned(
                 ty,
