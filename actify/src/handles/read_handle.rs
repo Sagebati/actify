@@ -1,13 +1,12 @@
 use std::any::type_name;
 use std::fmt::{self, Debug};
-use tokio::sync::broadcast;
 
 use super::handle::{Handle, ToView};
 
 /// A clonable read-only handle that can only be used to read the internal value.
 ///
 /// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`],
-/// [`ReadHandle::with`] and [`ReadHandle::subscribe`].
+/// and [`ReadHandle::with`].
 pub struct ReadHandle<T, V = T>(Handle<T, V>);
 
 impl<T, V> Clone for ReadHandle<T, V> {
@@ -29,25 +28,6 @@ impl<T, V> Debug for ReadHandle<T, V> {
 }
 
 impl<T, V> ReadHandle<T, V> {
-    /// Returns a [`tokio::sync::broadcast::Receiver`] that receives all broadcasted values.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(None);
-    /// let read_handle = handle.read_handle();
-    /// let mut rx = read_handle.subscribe();
-    /// handle.set(Some("testing!")).await;
-    /// assert_eq!(rx.recv().await.unwrap(), Some("testing!"));
-    /// # }
-    /// ```
-    pub fn subscribe(&self) -> broadcast::Receiver<V> {
-        self.0.subscribe()
-    }
-
     pub(super) fn new(handle: Handle<T, V>) -> Self {
         ReadHandle(handle)
     }

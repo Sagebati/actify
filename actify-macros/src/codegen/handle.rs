@@ -23,7 +23,7 @@ pub fn generate_trait(info: &ImplInfo) -> proc_macro2::TokenStream {
 /// Generate the handle trait implementation for `Handle<T, V>`.
 ///
 /// Adds an unconstrained `__V` type parameter so that the generated trait
-/// implementation works for all broadcast types, not just `Handle<T, T>`.
+/// implementation works for every view type, not just `Handle<T, T>`.
 pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
     let impl_attrs = &info.attributes;
     let handle_trait_ident = &info.handle_trait_ident;
@@ -36,13 +36,13 @@ pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
 
     // The future returned by each method holds `&Handle<T, __V>`, and a
     // reference is Send only if what it points at is Sync, so promising Send
-    // means the broadcast type has to be bounded here, and code generic over
-    // that type must bound it too.
-    let mut generics_with_broadcast = info.generics.clone();
-    generics_with_broadcast
+    // means the view type has to be bounded here, and code generic over that
+    // type must bound it too.
+    let mut generics_with_view = info.generics.clone();
+    generics_with_view
         .params
         .push(syn::parse_quote!(__V: Send + Sync + 'static));
-    let (impl_generics, _, _) = generics_with_broadcast.split_for_impl();
+    let (impl_generics, _, _) = generics_with_view.split_for_impl();
 
     let call_prefix = build_call_prefix(info);
     let methods = info
@@ -84,7 +84,7 @@ fn method_signature(method: &MethodInfo) -> proc_macro2::TokenStream {
 
 /// Generate the handle trait method implementation body.
 /// Boxes args, sends job to actor, the actor downcasts args, calls the original
-/// method, optionally broadcasts, and boxes the result.
+/// method, and boxes the result.
 fn method_body(
     method: &MethodInfo,
     call_prefix: &proc_macro2::TokenStream,
@@ -106,8 +106,6 @@ fn method_body(
     let output_type = &method.output_type;
     let return_type = quote_return_type(output_type);
 
-    let ident_string = ident.to_string();
-
     let awaiter = if method.is_async {
         Some(quote! { .await })
     } else {
@@ -116,12 +114,6 @@ fn method_body(
 
     let mutability = if method.is_mutable {
         Some(quote! { mut })
-    } else {
-        None
-    };
-
-    let broadcast = if method.broadcasts {
-        Some(quote! { __actify_s.broadcast(#ident_string); })
     } else {
         None
     };
@@ -139,8 +131,6 @@ fn method_body(
                         .expect("Downcasting failed due to an error in the Actify macro");
 
                     let __actify_result: #output_type = #call_prefix::#ident(&#mutability __actify_s.inner, #(#arg_names),*)#awaiter;
-
-                    #broadcast
 
                     ::std::boxed::Box::new(__actify_result) as ::std::boxed::Box<dyn ::std::any::Any + Send>
                 })),

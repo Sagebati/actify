@@ -1,24 +1,25 @@
 use std::any::Any;
 use std::any::type_name;
 use std::fmt::{self, Debug};
+use std::marker::PhantomData;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::read_handle::ReadHandle;
-use crate::actor::{Actor, ActorExit, ActorMethod, BroadcastFn, ExitState, Job, serve};
+use crate::actor::{Actor, ActorExit, ActorMethod, ExitState, Job, serve};
 
 pub(crate) const CHANNEL_SIZE: usize = 100;
 const DOWNCAST_FAIL: &str =
     "Actify Macro error: failed to downcast arguments to their concrete type";
 
-/// Defines the view an actor exposes: the type `V` that [`Handle::get`] returns
-/// and that the actor broadcasts.
+/// Defines the view an actor exposes: the type `V` that [`Handle::get`]
+/// returns.
 ///
 /// A blanket implementation is provided for [`Clone`] types, whose view is
 /// themselves. Implement this trait to expose a different type `V` from your
 /// actor type `T`, which allows:
 ///
-/// - Non-Clone types to be read and broadcast
+/// - Non-Clone types to be read
 /// - Clone types to expose a lightweight summary instead of the full value
 ///
 /// [`Handle::with`] reads the actor type itself either way.
@@ -45,8 +46,7 @@ const DOWNCAST_FAIL: &str =
 pub trait ToView<V> {
     /// Produces the view of the actor.
     ///
-    /// Runs on the actor task, after every broadcasting method and on every
-    /// [`Handle::get`].
+    /// Runs on the actor task, on every [`Handle::get`].
     fn to_view(&self) -> V;
 }
 
@@ -56,32 +56,6 @@ impl<T: Clone> ToView<T> for T {
     }
 }
 
-/// Creates the broadcast function that the [`Actor`] calls after each `&mut self` method.
-/// Converts the actor value to `V` via [`ToView`] and sends it to all subscribers.
-fn make_broadcast_fn<T, V>(sender: broadcast::Sender<V>) -> BroadcastFn<T>
-where
-    T: ToView<V>,
-    V: Clone + Send + Sync + 'static,
-{
-    Box::new(move |inner: &T, method: &'static str| {
-        if sender.receiver_count() > 0 {
-            if sender.send(inner.to_view()).is_err() {
-                tracing::trace!(
-                    method,
-                    "Broadcast failed because there are no active receivers"
-                );
-            } else {
-                tracing::trace!(method, "Broadcasted new value");
-            }
-        } else {
-            tracing::trace!(
-                method,
-                "Skipping broadcast because there are no active receivers"
-            );
-        }
-    })
-}
-
 /// A clonable handle that can be used to remotely execute a closure on the corresponding [`Actor`].
 ///
 /// Handles are the primary way to interact with actors. Cloning a handle shares
@@ -89,21 +63,20 @@ where
 /// [`ReadHandle`].
 ///
 /// The second type parameter `V` is the view the handle exposes: what
-/// [`Handle::get`] returns and what the actor broadcasts. By default `V = T`,
-/// so reads and broadcasts are clones of the actor itself. To expose a
-/// different type, implement [`ToView<V>`] and specify `V` explicitly
-/// (e.g. `Handle::<MyType, Summary>::new(val)`). [`Handle::with`] always reads
-/// the actor type.
+/// [`Handle::get`] returns. By default `V = T`, so a read is a clone of the
+/// actor itself. To expose a different type, implement [`ToView<V>`] and
+/// specify `V` explicitly (e.g. `Handle::<MyType, Summary>::new(val)`).
+/// [`Handle::with`] always reads the actor type.
 pub struct Handle<T, V = T> {
-    channels: Arc<Channels<T, V>>,
+    channels: Arc<Channels<T>>,
+    view: PhantomData<fn() -> V>,
 }
 
 /// The channel endpoints every clone of a [`Handle`] shares. One `Arc` holds
-/// all three, so a handle is a single pointer and cloning it is one reference
-/// count increment.
-struct Channels<T, V> {
+/// both, so a handle is a single pointer and cloning it is one reference count
+/// increment.
+struct Channels<T> {
     tx: mpsc::Sender<Job<T>>,
-    broadcast_sender: broadcast::Sender<V>,
     exit_rx: watch::Receiver<ExitState>,
 }
 
@@ -111,6 +84,7 @@ impl<T, V> Clone for Handle<T, V> {
     fn clone(&self) -> Self {
         Handle {
             channels: Arc::clone(&self.channels),
+            view: PhantomData,
         }
     }
 }
@@ -141,10 +115,10 @@ where
 {
     /// Creates a new [`Handle`] and spawns the corresponding [`Actor`].
     ///
-    /// For `Clone` types, `V` defaults to `T`: the actor broadcasts clones of
+    /// For `Clone` types, `V` defaults to `T`: a read is a clone of the actor
     /// itself and you can simply write `Handle::new(val)`.
     ///
-    /// For non-Clone types (or to broadcast a lightweight summary), implement
+    /// For non-Clone types (or to read a lightweight summary), implement
     /// [`ToView<V>`] and specify `V` explicitly:
     ///
     /// ```
@@ -159,36 +133,27 @@ where
     /// }
     ///
     /// let handle: Handle<Vec<u8>, Size> = Handle::new(vec![1, 2, 3]);
-    /// let mut rx = handle.subscribe();
+    /// assert_eq!(handle.get().await, Size(3));
     /// # }
     /// ```
     #[track_caller]
     pub fn new(val: T) -> Handle<T, V> {
         let (tx, rx) = mpsc::channel(CHANNEL_SIZE);
-        let (broadcast_tx, _) = broadcast::channel::<V>(CHANNEL_SIZE);
         let (exit_tx, exit_rx) = watch::channel(None);
-        let actor = Actor::new(
-            make_broadcast_fn(broadcast_tx.clone()),
-            val,
-            std::panic::Location::caller(),
-        );
+        let actor = Actor::new(val, std::panic::Location::caller());
         tokio::spawn(serve(rx, actor, exit_tx));
         Handle {
-            channels: Arc::new(Channels {
-                tx,
-                broadcast_sender: broadcast_tx,
-                exit_rx,
-            }),
+            channels: Arc::new(Channels { tx, exit_rx }),
+            view: PhantomData,
         }
     }
 
-    /// Returns the actor's current view, the type `V` it broadcasts.
+    /// Returns the actor's current view.
     ///
     /// For a `Clone` actor type without a [`ToView`] implementation of its own,
     /// `V` is the actor type and this is a clone of the whole value. Otherwise it
     /// is whatever [`ToView::to_view`] produces, and [`Handle::with`] reads the
     /// actor value itself.
-    /// Does not broadcast.
     ///
     /// # Examples
     ///
@@ -213,26 +178,6 @@ where
 }
 
 impl<T, V> Handle<T, V> {
-    /// Returns a [`tokio::sync::broadcast::Receiver`] that receives all broadcasted values.
-    /// Note that the inner value might not actually have changed.
-    /// It broadcasts on any method that has a mutable reference to the actor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(None);
-    /// let mut rx = handle.subscribe();
-    /// handle.set(Some("testing!")).await;
-    /// assert_eq!(rx.recv().await.unwrap(), Some("testing!"));
-    /// # }
-    /// ```
-    pub fn subscribe(&self) -> broadcast::Receiver<V> {
-        self.channels.broadcast_sender.subscribe()
-    }
-
     /// Returns a [`ReadHandle`] that provides read-only access to this actor.
     pub fn read_handle(&self) -> ReadHandle<T, V> {
         ReadHandle::new(self.clone())
@@ -320,7 +265,6 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     }
 
     /// Overwrites the inner value of the actor with the new value.
-    /// Broadcasts the new value to all subscribers.
     ///
     /// # Examples
     ///
@@ -340,49 +284,10 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     /// panicked or because its runtime shut down. See [Actor lifetime and
     /// panics](crate#actor-lifetime-and-panics).
     pub async fn set(&self, val: T) {
-        self.run(val, |s, val| {
-            s.inner = val;
-            s.broadcast("set");
-        })
-        .await
-    }
-
-    /// Overwrites the inner value, but only broadcasts if it actually changed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(1);
-    /// let mut rx = handle.subscribe();
-    /// handle.set_if_changed(1).await; // Same value, no broadcast
-    /// handle.set_if_changed(2).await; // Different value, broadcasts
-    /// assert_eq!(rx.recv().await.unwrap(), 2);
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn set_if_changed(&self, val: T)
-    where
-        T: PartialEq,
-    {
-        self.run(val, |s, val| {
-            if s.inner != val {
-                s.inner = val;
-                s.broadcast("set_if_changed");
-            }
-        })
-        .await
+        self.run(val, |s, val| s.inner = val).await
     }
 
     /// Runs a read-only closure on the actor's value and returns the result.
-    /// Does not broadcast.
     ///
     /// This reads parts of the actor state without cloning the entire value,
     /// and works with non-Clone types.
@@ -421,9 +326,7 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     /// This performs an atomic read-modify-return without a dedicated
     /// `#[actify]` method.
     ///
-    /// This always broadcasts after the closure returns, even if the closure
-    /// did not mutate anything; [`Handle::with`] is the read-only counterpart
-    /// and does not broadcast.
+    /// [`Handle::with`] is the read-only counterpart.
     ///
     /// # Examples
     ///
@@ -432,15 +335,11 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
     /// # #[tokio::main]
     /// # async fn main() {
     /// let handle = Handle::new(vec![1, 2, 3]);
-    /// let mut rx = handle.subscribe();
     ///
     /// // Mutate and return a result in one atomic operation
     /// let popped = handle.with_mut(|v| v.pop()).await;
     /// assert_eq!(popped, Some(3));
     /// assert_eq!(handle.get().await, vec![1, 2]);
-    ///
-    /// // The mutation triggered a broadcast
-    /// assert!(rx.try_recv().is_ok());
     /// # }
     /// ```
     ///
@@ -454,12 +353,7 @@ impl<T: Send + Sync + 'static, V> Handle<T, V> {
         F: FnOnce(&mut T) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.run(f, |s, f| {
-            let result = f(&mut s.inner);
-            s.broadcast("with_mut");
-            result
-        })
-        .await
+        self.run(f, |s, f| f(&mut s.inner)).await
     }
 }
 
@@ -749,16 +643,17 @@ mod tests {
         assert_eq!(handle2.get_value().await, 100);
     }
 
+    /// A non-Clone actor is read through its view, which `set` on the actor
+    /// type itself must also keep current.
     #[tokio::test]
-    async fn test_non_clone_actor_with_broadcast() {
+    async fn test_non_clone_actor_is_read_through_its_view() {
         let handle: Handle<NonCloneActor, i32> = Handle::new(NonCloneActor { value: 42 });
-        let mut rx = handle.subscribe();
 
         handle.set_value(100).await;
-        assert_eq!(rx.try_recv().unwrap(), 100);
+        assert_eq!(handle.get().await, 100);
 
         handle.set(NonCloneActor { value: 45 }).await;
-        assert_eq!(rx.try_recv().unwrap(), 45);
+        assert_eq!(handle.get().await, 45);
     }
 
     #[derive(Clone, Debug, PartialEq)]
@@ -771,39 +666,6 @@ mod tests {
         fn to_view(&self) -> usize {
             self.count
         }
-    }
-
-    /// A `&self` method cannot change the state, so there is nothing for
-    /// subscribers to observe. The `&mut self` call afterwards proves the
-    /// subscription is live and the first assertion did not pass by accident.
-    #[tokio::test]
-    async fn test_ref_self_method_does_not_broadcast() {
-        let handle: Handle<NonCloneActor, i32> = Handle::new(NonCloneActor { value: 42 });
-        let mut rx = handle.subscribe();
-
-        assert_eq!(handle.get_value().await, 42);
-        assert!(rx.try_recv().is_err());
-
-        handle.set_value(100).await;
-        assert_eq!(rx.try_recv().unwrap(), 100);
-    }
-
-    #[tokio::test]
-    async fn test_with_does_not_broadcast() {
-        let handle = Handle::new(vec![1, 2, 3]);
-        let mut rx = handle.subscribe();
-
-        let _len = handle.with(|v| v.len()).await;
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[tokio::test]
-    async fn test_with_mut_broadcasts_even_without_mutation() {
-        let handle = Handle::new(vec![1, 2, 3]);
-        let mut rx = handle.subscribe();
-
-        let _len = handle.with_mut(|v| v.len()).await;
-        assert!(rx.try_recv().is_ok());
     }
 
     /// `Handle<BigState, usize>` and `Handle<BigState>` used to print the same
@@ -830,8 +692,6 @@ mod tests {
             count: 3,
         });
 
-        let mut rx = handle.subscribe();
-
         assert_eq!(handle.get().await, 3);
 
         let updated = BigState {
@@ -840,7 +700,6 @@ mod tests {
         };
         handle.set(updated.clone()).await;
 
-        assert_eq!(rx.try_recv().unwrap(), 4);
         assert_eq!(handle.get().await, 4);
         assert_eq!(handle.with(|state| state.clone()).await, updated);
     }

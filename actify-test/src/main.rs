@@ -28,7 +28,6 @@ where
         f(i)
     }
 
-    #[actify::skip_broadcast]
     async fn baz(&mut self, i: i32) -> f64 {
         (i + 2) as f64
     }
@@ -58,7 +57,7 @@ impl SomeStruct {
     }
 }
 
-#[actify(name = "SomeStructGetters", skip_broadcast)]
+#[actify(name = "SomeStructGetters")]
 impl SomeStruct {
     fn get_inner(&self) -> bool {
         self.inner_bool
@@ -414,27 +413,8 @@ impl CfgImplActor {
     }
 }
 
-#[derive(Clone, Debug)]
-struct SkipMultipleBroadcastsActor {
-    value: i32,
-}
-
-#[actify(skip_broadcast)]
-impl SkipMultipleBroadcastsActor {
-    fn skipped_method(&mut self, x: i32) -> i32 {
-        self.value = x;
-        x
-    }
-
-    #[actify::broadcast]
-    fn broadcast_method(&mut self, x: i32) -> i32 {
-        self.value = x;
-        x * 2
-    }
-}
-
-/// Interior mutability lets a `&self` method change what subscribers observe,
-/// which is the case `#[actify::broadcast]` exists for.
+/// A non-Clone actor reached through a view, whose `&self` methods change the
+/// state behind a lock.
 #[derive(Debug)]
 struct InteriorMutabilityActor {
     value: Mutex<i32>,
@@ -448,7 +428,6 @@ impl ToView<i32> for InteriorMutabilityActor {
 
 #[actify]
 impl InteriorMutabilityActor {
-    #[actify::broadcast]
     fn increment(&self) -> i32 {
         let mut value = self.value.lock().unwrap();
         *value += 1;
@@ -756,32 +735,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skip_broadcast() {
-        let actor_handle = Handle::new(TestStruct {
-            inner_data: "Test".to_string(),
-        });
-
-        let mut rx = actor_handle.subscribe();
-        assert!(rx.try_recv().is_err()); // Nothing
-
-        actor_handle.foo(0, HashMap::new()).await;
-        assert!(rx.try_recv().is_ok());
-
-        actor_handle.foo(1, HashMap::new()).await;
-        assert!(rx.try_recv().is_ok());
-
-        actor_handle
-            .set(TestStruct {
-                inner_data: "Test2".to_string(),
-            })
-            .await;
-        assert!(rx.try_recv().is_ok());
-
-        actor_handle.baz(0).await;
-        assert!(rx.try_recv().is_err()); // Nothing
-    }
-
-    #[tokio::test]
     async fn test_instrument_attr_stripped_from_handle() {
         let handle = Handle::new(InstrumentedActor { value: 10 });
 
@@ -801,32 +754,20 @@ mod tests {
         assert_eq!(handle.get_count().await, 2);
     }
 
+    /// A `&self` method behind interior mutability changes what a later read
+    /// sees, which is why the view is read from the actor rather than cloned
+    /// from it.
     #[tokio::test]
-    async fn test_block_skip_broadcast() {
-        let handle = Handle::new(SkipMultipleBroadcastsActor { value: 0 });
-        let mut rx = handle.subscribe();
-
-        // skipped_method has no #[broadcast], so block default (skip) applies
-        handle.skipped_method(10).await;
-        assert!(rx.try_recv().is_err());
-
-        // broadcast_method has #[broadcast], overriding the block default
-        handle.broadcast_method(20).await;
-        assert!(rx.try_recv().is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_ref_self_broadcast_opt_in() {
+    async fn test_interior_mutability_is_visible_through_the_view() {
         let handle: Handle<InteriorMutabilityActor, i32> = Handle::new(InteriorMutabilityActor {
             value: Mutex::new(0),
         });
-        let mut rx = handle.subscribe();
 
         assert_eq!(handle.peek().await, 0);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(handle.get().await, 0);
 
         assert_eq!(handle.increment().await, 1);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        assert_eq!(handle.get().await, 1);
     }
 
     /// Returns whether a future is still pending once nothing else can make

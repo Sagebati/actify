@@ -15,8 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// span's `actor_id` carries.
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) type BroadcastFn<T> = Box<dyn Fn(&T, &'static str) + Send + Sync>;
-
 /// The internal actor wrapper that runs in a separate task.
 ///
 /// You do not create this directly. It is spawned by [`Handle::new`](super::Handle::new).
@@ -24,7 +22,6 @@ pub(crate) type BroadcastFn<T> = Box<dyn Fn(&T, &'static str) + Send + Sync>;
 #[doc(hidden)]
 pub struct Actor<T> {
     pub inner: T,
-    broadcast_fn: BroadcastFn<T>,
     id: u64,
     spawned_at: &'static Location<'static>,
 }
@@ -38,22 +35,13 @@ impl<T: Debug> Debug for Actor<T> {
 impl<T> Actor<T> {
     /// The id and the spawn site name the instance, and both go on the actor
     /// span.
-    pub(crate) fn new(
-        broadcast_fn: BroadcastFn<T>,
-        inner: T,
-        spawned_at: &'static Location<'static>,
-    ) -> Self {
+    pub(crate) fn new(inner: T, spawned_at: &'static Location<'static>) -> Self {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         Self {
             inner,
-            broadcast_fn,
             id,
             spawned_at,
         }
-    }
-
-    pub fn broadcast(&mut self, method: &'static str) {
-        (self.broadcast_fn)(&self.inner, method);
     }
 }
 

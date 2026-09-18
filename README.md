@@ -29,8 +29,7 @@ By generating the boilerplate code for you, a few key benefits are provided:
 - [Atomic](https://www.codingem.com/atomic-meaning-in-programming/) access and mutation of underlying data through clonable handles.
 - Typed arguments and return values on the methods from your actor, exposed through each handle.
 - No need to manually define message structs or enums!
-- Built-in methods like `get()`, `set()`, `set_if_changed()`, and `subscribe()` even without using the macro.
-- Automatic broadcasting to subscribers from methods taking `&mut self`, with `#[actify::broadcast]` and `#[actify::skip_broadcast]` overrides.
+- Built-in methods like `get()`, `set()`, `with()` and `with_mut()` even without using the macro.
 - Methods that cannot be actified can stay in the impl block with `#[actify::skip]`.
 - Generic type parameters supported in both actor types and method arguments.
 - Extension traits for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
@@ -65,28 +64,6 @@ async fn main() {
 }
 ```
 
-## Reactive Subscriptions
-
-Actors broadcast state changes automatically. Subscribers let you react to updates without polling:
-
-```rust
-use actify::Handle;
-
-#[tokio::main]
-async fn main() {
-    let handle = Handle::new(0);
-
-    // Subscribe to raw broadcast events
-    let mut rx = handle.subscribe();
-
-    handle.set(42).await;
-
-    // The subscriber receives every change
-    assert_eq!(rx.recv().await.unwrap(), 42);
-}
-```
-
 For full API documentation, see [docs.rs](https://docs.rs/actify/latest/actify/).
 
-Upgrading from 0.8 to 0.9? The [changelog](CHANGELOG.md) records every change,
-starting with the four that compile cleanly and behave differently.
+The [changelog](CHANGELOG.md) records every change.

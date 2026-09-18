@@ -15,11 +15,9 @@
 //! * Access to actors through clonable [`Handle`]s
 //! * Typed arguments on the methods from your actor, exposed through the handle
 //! * No need to define message structs or enums!
-//! * Automatic [broadcasting] of state changes to subscribers
 //! * Built-in [extension traits] for common standard library types
 //!
 //! [tokio]: https://docs.rs/tokio/latest/tokio/
-//! [broadcasting]: #broadcasting
 //! [extension traits]: #extension-traits
 //!
 //! # Main functionality of actify!
@@ -81,7 +79,6 @@
 //!                     Box::pin(async move {
 //!                         let name: String = *args.downcast().unwrap();
 //!                         let result: String = Greeter::say_hi(&s.inner, name);
-//!                         s.broadcast("say_hi");
 //!                         Box::new(result) as Box<dyn std::any::Any + Send>
 //!                     })),
 //!                 Box::new(name),
@@ -194,13 +191,11 @@
 //! Every [`Handle`] provides a set of built-in methods that work without the macro:
 //!
 //! - [`Handle::get`]: returns the actor's view, which for a plain `Clone` actor is a
-//!   clone of the value itself (does not broadcast)
-//! - [`Handle::set`]: overwrites the actor value (broadcasts the change)
-//! - [`Handle::set_if_changed`]: only broadcasts when the new value differs (requires `PartialEq`)
-//! - [`Handle::subscribe`]: returns a [`tokio::sync::broadcast::Receiver`] for change notifications
+//!   clone of the value itself
+//! - [`Handle::set`]: overwrites the actor value
 //! - [`Handle::with`]: runs a read-only closure on `&T`, the actor type rather than
-//!   its view (does not broadcast)
-//! - [`Handle::with_mut`]: runs a mutable closure on `&mut T` (broadcasts the change)
+//!   its view
+//! - [`Handle::with_mut`]: runs a mutable closure on `&mut T`
 //!
 //! # Leaving methods off the handle
 //!
@@ -239,79 +234,7 @@
 //! The method stays on the type, unchanged, and is not checked, so it may take
 //! or return references.
 //!
-//! # Broadcasting
-//!
-//! A method taking `&mut self` broadcasts the updated value to all subscribers
-//! after it returns. A method taking `&self` does not broadcast.
-//!
-//! ```
-//! # use actify::{Handle, actify};
-//! # #[derive(Clone, Debug)]
-//! # struct Counter { value: i32 }
-//! #[actify]
-//! impl Counter {
-//!     fn increment(&mut self) -> i32 {
-//!         self.value += 1;
-//!         self.value
-//!     }
-//!
-//!     fn value(&self) -> i32 {
-//!         self.value
-//!     }
-//! }
-//!
-//! #[tokio::main]
-//! async fn main() {
-//!     let handle = Handle::new(Counter { value: 0 });
-//!     let mut rx = handle.subscribe();
-//!
-//!     handle.value().await;
-//!     assert!(rx.try_recv().is_err());
-//!
-//!     handle.increment().await;
-//!     assert_eq!(rx.try_recv().unwrap().value, 1);
-//! }
-//! ```
-//!
-//! Three attributes override the receiver:
-//!
-//! - `#[actify::broadcast]`: broadcast from a method taking `&self`
-//! - `#[actify::skip_broadcast]`: do not broadcast from a method taking `&mut self`
-//! - `#[actify(skip_broadcast)]`: no method in the impl block broadcasts unless it
-//!   carries `#[actify::broadcast]`
-//!
-//! `#[actify::broadcast]` applies where a `&self` method changes what subscribers
-//! observe, which requires interior mutability:
-//!
-//! ```
-//! # use actify::{Handle, actify, ToView};
-//! # use std::sync::Mutex;
-//! # #[derive(Debug)]
-//! # struct Counter { value: Mutex<i32> }
-//! # impl ToView<i32> for Counter {
-//! #     fn to_view(&self) -> i32 { *self.value.lock().unwrap() }
-//! # }
-//! #[actify]
-//! impl Counter {
-//!     #[actify::broadcast]
-//!     fn increment(&self) -> i32 {
-//!         let mut value = self.value.lock().unwrap();
-//!         *value += 1;
-//!         *value
-//!     }
-//! }
-//!
-//! #[tokio::main]
-//! async fn main() {
-//!     let handle: Handle<Counter, i32> = Handle::new(Counter { value: Mutex::new(0) });
-//!     let mut rx = handle.subscribe();
-//!
-//!     assert_eq!(handle.increment().await, 1);
-//!     assert_eq!(rx.try_recv().unwrap(), 1);
-//! }
-//! ```
-//!
-//! ## Multiple impl blocks
+//! # Multiple impl blocks
 //!
 //! Each `#[actify]` block generates a trait named `{Type}Handle`. To use multiple
 //! impl blocks on the same type, provide a custom trait name with `name = "..."` to
@@ -346,8 +269,7 @@
 //! # ReadHandle
 //!
 //! A [`ReadHandle`] is a read-only view of an actor. It supports [`get`](ReadHandle::get),
-//! [`with`](ReadHandle::with) and [`subscribe`](ReadHandle::subscribe), but
-//! cannot mutate the actor. Obtain one via
+//! and [`with`](ReadHandle::with), but cannot mutate the actor. Obtain one via
 //! [`Handle::read_handle`].
 //!
 //! # Extension traits
@@ -365,8 +287,8 @@
 //! # Views and non-Clone types
 //!
 //! A handle exposes a view of its actor: the type `V` that [`Handle::get`]
-//! returns and that the actor broadcasts. By default `V = T`, so
-//! [`Handle::new`] requires `T: Clone` and the view is a clone of the value.
+//! returns. By default `V = T`, so [`Handle::new`] requires `T: Clone` and the
+//! view is a clone of the value.
 //!
 //! For a non-Clone type, or to expose a summary instead of the whole value,
 //! implement [`ToView<V>`] for a Clone-able `V` and name it explicitly:
@@ -445,8 +367,7 @@
 //!
 //! Every actor exit is reported with the reason as a field: at ERROR when a
 //! method panicked, at DEBUG when the actor stopped because its handles were
-//! dropped or its runtime shut down, and each broadcast at TRACE with the
-//! method that caused it.
+//! dropped or its runtime shut down.
 //!
 //! Nothing is emitted without a tracing subscriber. A dependent reading
 //! diagnostics through the `log` crate can enable the `log` feature instead.
@@ -475,7 +396,7 @@ mod extensions;
 mod handles;
 
 // Reexport for easier reference
-pub use actify_macros::{actify, broadcast, skip, skip_broadcast};
+pub use actify_macros::{actify, skip};
 pub use extensions::{
     map::HashMapHandle, option::OptionHandle, set::HashSetHandle, string::StringHandle,
     vec::VecHandle, vecdeque::VecDequeHandle,

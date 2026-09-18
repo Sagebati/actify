@@ -36,7 +36,6 @@ impl ImplInfo {
     /// Mutates the impl block to ensure a where clause exists.
     pub fn from_impl_block(
         impl_block: &mut ItemImpl,
-        skip_all_broadcasts: bool,
         custom_name: Option<syn::LitStr>,
     ) -> syn::Result<ImplInfo> {
         let type_ident = get_impl_type_ident(&impl_block.self_ty)?;
@@ -71,13 +70,10 @@ impl ImplInfo {
             // Skipped methods are not parsed at all, so a signature that no
             // actor call could express is allowed to stay in the block.
             if find_marker_attribute(&method.attrs, "skip").is_some() {
-                if let Some(error) = broadcast_attributes_on_skipped(method) {
-                    accumulate(&mut errors, error);
-                }
                 continue;
             }
 
-            match MethodInfo::from_impl_method(method, skip_all_broadcasts) {
+            match MethodInfo::from_impl_method(method) {
                 Ok(info) => methods.push(info),
                 Err(error) => accumulate(&mut errors, error),
             }
@@ -99,25 +95,6 @@ impl ImplInfo {
     }
 }
 
-/// Report `#[broadcast]` and `#[skip_broadcast]` on a skipped method.
-///
-/// Both decide whether a generated method broadcasts, and a skipped method has
-/// none, so either is a mistake worth naming rather than ignoring.
-fn broadcast_attributes_on_skipped(method: &ImplItemFn) -> Option<Error> {
-    let mut errors = None;
-
-    for name in ["broadcast", "skip_broadcast"] {
-        let Some(attr) = find_marker_attribute(&method.attrs, name) else {
-            continue;
-        };
-        let message =
-            format!("#[{name}] is superfluous: #[skip] leaves this method off the handle entirely");
-        accumulate(&mut errors, Error::new(attr.span(), message));
-    }
-
-    errors
-}
-
 /// Intermediate representation for a single method within the impl block.
 pub struct MethodInfo {
     /// Original method name.
@@ -126,8 +103,6 @@ pub struct MethodInfo {
     pub is_mutable: bool,
     /// Whether the method is async.
     pub is_async: bool,
-    /// Whether the generated method broadcasts after calling the actor method.
-    pub broadcasts: bool,
     /// Argument identifiers. For destructuring patterns a positional name is generated.
     pub arg_names: Punctuated<Ident, Comma>,
     /// Argument types.
@@ -142,7 +117,7 @@ pub struct MethodInfo {
 
 impl MethodInfo {
     /// Parse a single `ImplItemFn` into its intermediate representation.
-    fn from_impl_method(method: &ImplItemFn, skip_all_broadcasts: bool) -> syn::Result<MethodInfo> {
+    fn from_impl_method(method: &ImplItemFn) -> syn::Result<MethodInfo> {
         let ident = method.sig.ident.clone();
 
         let is_mutable = method.sig.inputs.iter().any(|arg| {
@@ -156,48 +131,7 @@ impl MethodInfo {
         });
         let is_async = method.sig.asyncness.is_some();
 
-        let skip_attr = find_marker_attribute(&method.attrs, "skip_broadcast");
-        let broadcast_attr = find_marker_attribute(&method.attrs, "broadcast");
-
         let mut errors = None;
-
-        // A `&self` method cannot change the state, so it only broadcasts when
-        // asked to. Interior mutability and a custom `to_view` are the
-        // cases where that is meaningful.
-        let broadcasts = if skip_all_broadcasts {
-            if let Some(attr) = skip_attr {
-                accumulate(
-                    &mut errors,
-                    Error::new(
-                        attr.span(),
-                        "#[skip_broadcast] is superfluous: the impl block already skips all broadcasts via #[actify(skip_broadcast)]",
-                    ),
-                );
-            }
-            broadcast_attr.is_some()
-        } else if is_mutable {
-            if let Some(attr) = broadcast_attr {
-                accumulate(
-                    &mut errors,
-                    Error::new(
-                        attr.span(),
-                        "#[broadcast] is superfluous: methods taking &mut self broadcast by default",
-                    ),
-                );
-            }
-            skip_attr.is_none()
-        } else {
-            if let Some(attr) = skip_attr {
-                accumulate(
-                    &mut errors,
-                    Error::new(
-                        attr.span(),
-                        "#[skip_broadcast] is superfluous: methods taking &self do not broadcast; use #[actify::broadcast] to opt in",
-                    ),
-                );
-            }
-            broadcast_attr.is_some()
-        };
 
         if let Err(error) = validate_signature_modifiers(method) {
             accumulate(&mut errors, error);
@@ -234,7 +168,6 @@ impl MethodInfo {
             ident,
             is_mutable,
             is_async,
-            broadcasts,
             arg_names,
             arg_types,
             output_type,
@@ -264,7 +197,7 @@ fn get_impl_type_ident(impl_type: &Type) -> syn::Result<Ident> {
 
 /// Built-in compiler attributes that are safe to propagate onto generated trait
 /// signatures and handle impl methods. Everything else (proc-macro attributes
-/// like `#[instrument]`, actify-specific attributes like `#[skip_broadcast]`)
+/// like `#[instrument]`, actify-specific attributes like `#[skip]`)
 /// is stripped so it only appears on the original impl method where it belongs.
 const PROPAGATED_ATTRIBUTES: &[&str] = &[
     "doc",
@@ -282,7 +215,7 @@ const PROPAGATED_ATTRIBUTES: &[&str] = &[
 ///
 /// Only single-segment paths are checked (all built-in compiler attributes are
 /// single-segment). Multi-segment paths like `tracing::instrument` or
-/// `actify::skip_broadcast` are always excluded.
+/// `actify::skip` are always excluded.
 fn is_propagated_attribute(attr: &Attribute) -> bool {
     let segments = &attr.path().segments;
     segments.len() == 1
@@ -295,9 +228,9 @@ fn is_propagated_attribute(attr: &Attribute) -> bool {
 ///
 /// A proc-macro attribute like `#[instrument]` rewrites the function it is
 /// placed on, which is meant for the user's method and not for a generated
-/// method that forwards a call to it. An actify attribute like
-/// `#[skip_broadcast]` has already done its work during parsing. Both are
-/// stripped and remain only on the original impl method.
+/// method that forwards a call to it. An actify attribute like `#[skip]` has
+/// already done its work during parsing. Both are stripped and remain only on
+/// the original impl method.
 fn filter_attributes(attrs: &[Attribute]) -> Vec<Attribute> {
     attrs
         .iter()
@@ -306,12 +239,11 @@ fn filter_attributes(attrs: &[Attribute]) -> Vec<Attribute> {
         .collect()
 }
 
-/// Find one of actify's marker attributes (`broadcast`, `skip_broadcast`, `skip`).
+/// Find actify's `skip` marker attribute.
 ///
 /// Only the two spellings actify actually exports are recognised: bare
-/// (`#[broadcast]`, via a `use`) and crate-qualified (`#[actify::broadcast]`).
-/// Matching a name anywhere in the path would claim another crate's attribute,
-/// and the author would be told their own attribute is a superfluous actify one.
+/// (`#[skip]`, via a `use`) and crate-qualified (`#[actify::skip]`). Matching a
+/// name anywhere in the path would claim another crate's attribute.
 fn find_marker_attribute<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a Attribute> {
     attrs.iter().find(|attr| {
         let path = attr.path();
@@ -531,9 +463,8 @@ mod tests {
     #[test]
     fn actify_attrs_are_stripped() {
         let attrs: Vec<Attribute> = vec![
-            attr(parse_quote!(#[skip_broadcast])),
-            attr(parse_quote!(#[broadcast])),
-            attr(parse_quote!(#[actify::skip_broadcast])),
+            attr(parse_quote!(#[skip])),
+            attr(parse_quote!(#[actify::skip])),
             attr(parse_quote!(#[doc = "visible"])),
         ];
 
@@ -544,38 +475,23 @@ mod tests {
 
     #[test]
     fn marker_attributes_are_recognised_bare_and_qualified() {
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_some());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_some());
 
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_some());
-
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "skip_broadcast").is_some());
-
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "skip_broadcast").is_some());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_some());
     }
 
     #[test]
     fn marker_attributes_of_other_crates_are_ignored() {
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[other_crate::broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[other_crate::skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_none());
 
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[broadcast::configure]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip::configure]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_none());
 
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[a::b::skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "skip_broadcast").is_none());
-    }
-
-    #[test]
-    fn marker_attribute_names_do_not_overlap() {
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
-
-        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[actify::skip_broadcast]))];
-        assert!(find_marker_attribute(&attrs, "broadcast").is_none());
+        let attrs: Vec<Attribute> = vec![attr(parse_quote!(#[a::b::skip]))];
+        assert!(find_marker_attribute(&attrs, "skip").is_none());
     }
 
     #[test]
