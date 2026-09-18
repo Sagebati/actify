@@ -462,10 +462,11 @@ mod actor;
 mod channel;
 mod extensions;
 mod handles;
+mod message;
 
 // Reexport for easier reference
 pub use actify_macros::{actify, skip};
-pub use actor::Job;
+pub use actor::Dispatch;
 pub use channel::{Closed, JobReceiver, JobSender};
 pub use extensions::{
     map::HashMapHandle, option::OptionHandle, set::HashSetHandle, string::StringHandle,
@@ -474,6 +475,7 @@ pub use extensions::{
 pub use handles::{
     DefaultChannel, DefaultReceiver, DefaultSender, Handle, HandleBuilder, ReadHandle, ToView,
 };
+pub use message::{Builtin, Job};
 
 /// The crate's own items that the [`actify`](macro@crate::actify) macro needs in
 /// generated code. Standard library types are named by absolute path instead.
@@ -482,5 +484,5 @@ pub use handles::{
 /// only generated code names it.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::actor::Actor;
+    pub use crate::actor::{Actor, ClosureJob, Reply, reply};
 }

@@ -22,9 +22,9 @@ pub fn generate_trait(info: &ImplInfo) -> proc_macro2::TokenStream {
 
 /// Generate the handle trait implementation for `Handle<T, V, S>`.
 ///
-/// Adds a `__V` and a `__S` type parameter so that the generated trait
-/// implementation works for every view type and every job channel, not just
-/// the defaults of `Handle<T>`.
+/// Adds a `__V`, a `__M` and a `__S` type parameter so that the generated trait
+/// implementation works for every view type, every message type and every job
+/// channel, not just the defaults of `Handle<T>`.
 pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
     let impl_attrs = &info.attributes;
     let handle_trait_ident = &info.handle_trait_ident;
@@ -35,18 +35,21 @@ pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
     // TypeGenerics renders; the full Generics would emit `T: Clone` there.
     let (_, trait_generics, where_clause) = info.generics.split_for_impl();
 
-    // The future returned by each method holds `&Handle<T, __V, __S>`, and a
-    // reference is Send only if what it points at is Sync, so promising Send
+    // The future returned by each method holds `&Handle<T, __V, __M, __S>`, and
+    // a reference is Send only if what it points at is Sync, so promising Send
     // means the view type has to be bounded here, and code generic over that
-    // type must bound it too. `__S` is what carries the call to the actor, so
-    // it is bounded by the trait a job channel's sending half implements.
+    // type must bound it too. `__M` is the message the channel carries, bounded
+    // by what these methods send, and `__S` is the sending half that carries it.
     let mut handle_generics = info.generics.clone();
     handle_generics
         .params
         .push(syn::parse_quote!(__V: Send + Sync + 'static));
+    handle_generics.params.push(syn::parse_quote!(
+        __M: ::std::convert::From<::actify::__private::ClosureJob<#impl_type>> + Send + 'static
+    ));
     handle_generics
         .params
-        .push(syn::parse_quote!(__S: ::actify::JobSender<::actify::Job<#impl_type>>));
+        .push(syn::parse_quote!(__S: ::actify::JobSender<__M>));
     let (impl_generics, _, _) = handle_generics.split_for_impl();
 
     let call_prefix = build_call_prefix(info);
@@ -58,7 +61,7 @@ pub fn generate_trait_impl(info: &ImplInfo) -> proc_macro2::TokenStream {
     quote! {
         #(#impl_attrs)*
         #[allow(unused_parens)]
-        impl #impl_generics #handle_trait_ident #trait_generics for ::actify::Handle<#impl_type, __V, __S> #where_clause
+        impl #impl_generics #handle_trait_ident #trait_generics for ::actify::Handle<#impl_type, __V, __M, __S> #where_clause
         {
             #(#methods)*
         }

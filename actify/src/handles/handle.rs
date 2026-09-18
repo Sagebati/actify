@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use super::builder::HandleBuilder;
 use super::read_handle::ReadHandle;
-use crate::actor::{Actor, ActorMethod, Job};
+use crate::actor::{Actor, ActorMethod, ClosureJob, reply};
 use crate::channel::JobSender;
+use crate::message::{Builtin, Job};
 
 /// Panics because the actor is gone, whether it stopped or a method of it
 /// panicked. Which of the two it was is on the actor's own exit event, at
@@ -74,21 +75,26 @@ impl<T: Clone> ToView<T> for T {
 /// actor itself. To expose a different type, implement [`ToView<V>`] and
 /// specify `V` explicitly (e.g. `Handle::<MyType, Summary>::new(val)`).
 /// [`Handle::with`] always reads the actor type.
-pub struct Handle<T, V = T, S = DefaultSender<T>> {
+pub struct Handle<T, V = T, M = Job<T, V>, S = DefaultSender<M>> {
     // The `Arc` is what makes a handle one pointer wide and what stops the
     // actor: the last handle to drop drops the only sending half with it.
     sender: Arc<S>,
-    actor: PhantomData<fn() -> (T, V)>,
+    actor: Marker<T, V, M>,
 }
+
+/// Names the types a handle is for without holding one of them, and without
+/// borrowing their auto traits: a handle is `Send` and `Sync` on the strength
+/// of its channel alone.
+type Marker<T, V, M> = PhantomData<fn() -> (T, V, M)>;
 
 /// The channel a handle uses when the caller supplies none: an unbounded
 /// [`futures_channel`] queue, so a call never waits to be queued.
-pub type DefaultSender<T> = futures_channel::mpsc::UnboundedSender<Job<T>>;
+pub type DefaultSender<M> = futures_channel::mpsc::UnboundedSender<M>;
 
 /// The receiving half of [`DefaultSender`], which the actor future reads.
-pub type DefaultReceiver<T> = futures_channel::mpsc::UnboundedReceiver<Job<T>>;
+pub type DefaultReceiver<M> = futures_channel::mpsc::UnboundedReceiver<M>;
 
-impl<T, V, S> Clone for Handle<T, V, S> {
+impl<T, V, M, S> Clone for Handle<T, V, M, S> {
     fn clone(&self) -> Self {
         Handle {
             sender: Arc::clone(&self.sender),
@@ -97,7 +103,7 @@ impl<T, V, S> Clone for Handle<T, V, S> {
     }
 }
 
-impl<T, V, S> Debug for Handle<T, V, S> {
+impl<T, V, M, S> Debug for Handle<T, V, M, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let actor = type_name::<T>();
         let view = type_name::<V>();
@@ -179,11 +185,12 @@ where
     }
 }
 
-impl<T, V, S> Handle<T, V, S>
+impl<T, V, M, S> Handle<T, V, M, S>
 where
     T: ToView<V> + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: JobSender<Job<T>>,
+    M: From<Builtin<T, V>> + Send + 'static,
+    S: JobSender<M>,
 {
     /// Returns the actor's current view.
     ///
@@ -210,11 +217,37 @@ where
     /// panicked or because its runtime shut down. See [Actor lifetime and
     /// panics](crate#actor-lifetime-and-panics).
     pub async fn get(&self) -> V {
-        self.run((), |s, _| s.inner.to_view()).await
+        let (reply, get_result) = reply();
+        self.__call(Builtin::Get(reply).into(), get_result).await
+    }
+
+    /// Overwrites the inner value of the actor with the new value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::Handle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let handle = Handle::new(None);
+    /// handle.set(Some(1)).await;
+    /// assert_eq!(handle.get().await, Some(1));
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the actor has stopped, either because one of its methods
+    /// panicked or because its runtime shut down. See [Actor lifetime and
+    /// panics](crate#actor-lifetime-and-panics).
+    pub async fn set(&self, val: T) {
+        let (reply, get_result) = reply();
+        self.__call(Builtin::Set(val, reply).into(), get_result)
+            .await
     }
 }
 
-impl<T, V, S> Handle<T, V, S> {
+impl<T, V, M, S> Handle<T, V, M, S> {
     pub(super) fn from_sender(sender: S) -> Self {
         Handle {
             sender: Arc::new(sender),
@@ -223,15 +256,37 @@ impl<T, V, S> Handle<T, V, S> {
     }
 
     /// Returns a [`ReadHandle`] that provides read-only access to this actor.
-    pub fn read_handle(&self) -> ReadHandle<T, V, S> {
+    pub fn read_handle(&self) -> ReadHandle<T, V, M, S> {
         ReadHandle::new(self.clone())
     }
 }
 
-impl<T, V, S> Handle<T, V, S>
+impl<T, V, M, S> Handle<T, V, M, S>
+where
+    T: 'static,
+    M: Send + 'static,
+    S: JobSender<M>,
+{
+    /// Queues one call and waits for its reply.
+    ///
+    /// The reply channel is the caller's to make, so that it carries the
+    /// method's own return type rather than something erased.
+    #[doc(hidden)]
+    pub async fn __call<R>(&self, message: M, get_result: oneshot::Receiver<R>) -> R {
+        if self.sender.send(message).await.is_ok() {
+            if let Ok(res) = get_result.await {
+                return res;
+            }
+        }
+        report_actor_gone::<T>()
+    }
+}
+
+impl<T, V, M, S> Handle<T, V, M, S>
 where
     T: Send + Sync + 'static,
-    S: JobSender<Job<T>>,
+    M: From<ClosureJob<T>> + Send + 'static,
+    S: JobSender<M>,
 {
     #[doc(hidden)]
     pub async fn __send_job(
@@ -240,17 +295,12 @@ where
         args: Box<dyn Any + Send + Sync>,
     ) -> Box<dyn Any + Send + Sync> {
         let (respond_to, get_result) = oneshot::channel();
-        let job = Job {
+        let job = ClosureJob {
             call,
             args,
             respond_to,
         };
-        if self.sender.send(job).await.is_ok() {
-            if let Ok(res) = get_result.await {
-                return res;
-            }
-        }
-        report_actor_gone::<T>()
+        self.__call(job.into(), get_result).await
     }
 
     /// Sends a closure to the actor, handling all boxing/unboxing internally.
@@ -274,32 +324,6 @@ where
             )
             .await;
         *res.downcast::<R>().expect(DOWNCAST_FAIL)
-    }
-
-    /// Overwrites the inner value of the actor with the new value.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::Handle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let handle = Handle::new(None);
-    /// handle.set(Some(1)).await;
-    /// assert_eq!(handle.get().await, Some(1));
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn set(&self, val: T)
-    where
-        T: Sync,
-    {
-        self.run(val, |s, val| s.inner = val).await
     }
 
     /// Runs a read-only closure on the actor's value and returns the result.

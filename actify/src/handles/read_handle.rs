@@ -7,15 +7,17 @@ use super::handle::{Handle, ToView};
 ///
 /// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`],
 /// and [`ReadHandle::with`].
-pub struct ReadHandle<T, V = T, S = crate::handles::DefaultSender<T>>(Handle<T, V, S>);
+pub struct ReadHandle<T, V = T, M = crate::message::Job<T, V>, S = crate::handles::DefaultSender<M>>(
+    Handle<T, V, M, S>,
+);
 
-impl<T, V, S> Clone for ReadHandle<T, V, S> {
+impl<T, V, M, S> Clone for ReadHandle<T, V, M, S> {
     fn clone(&self) -> Self {
         ReadHandle(self.0.clone())
     }
 }
 
-impl<T, V, S> Debug for ReadHandle<T, V, S> {
+impl<T, V, M, S> Debug for ReadHandle<T, V, M, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let actor = type_name::<T>();
         let view = type_name::<V>();
@@ -27,16 +29,17 @@ impl<T, V, S> Debug for ReadHandle<T, V, S> {
     }
 }
 
-impl<T, V, S> ReadHandle<T, V, S> {
-    pub(super) fn new(handle: Handle<T, V, S>) -> Self {
+impl<T, V, M, S> ReadHandle<T, V, M, S> {
+    pub(super) fn new(handle: Handle<T, V, M, S>) -> Self {
         ReadHandle(handle)
     }
 }
 
-impl<T, V, S> ReadHandle<T, V, S>
+impl<T, V, M, S> ReadHandle<T, V, M, S>
 where
     T: Send + Sync + 'static,
-    S: crate::channel::JobSender<crate::actor::Job<T>>,
+    M: From<crate::actor::ClosureJob<T>> + Send + 'static,
+    S: crate::channel::JobSender<M>,
 {
     /// Runs a read-only closure on the actor's value and returns the result.
     ///
@@ -86,11 +89,12 @@ where
     }
 }
 
-impl<T, V, S> ReadHandle<T, V, S>
+impl<T, V, M, S> ReadHandle<T, V, M, S>
 where
     T: ToView<V> + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: crate::channel::JobSender<crate::actor::Job<T>>,
+    M: From<crate::message::Builtin<T, V>> + Send + 'static,
+    S: crate::channel::JobSender<M>,
 {
     /// Returns the actor's current view. See [`Handle::get`].
     ///

@@ -47,6 +47,54 @@ impl<T> Actor<T> {
     }
 }
 
+/// The half of a call's reply channel that the actor holds.
+///
+/// It carries the concrete return type, so a result travels home as itself
+/// rather than as a boxed `Any` the caller has to downcast. Answering it is
+/// [`Actor::respond`].
+pub struct Reply<R>(oneshot::Sender<R>);
+
+impl<R> Debug for Reply<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Reply<{}>", type_name::<R>())
+    }
+}
+
+/// Creates the two halves of one call's reply channel.
+///
+/// The actor keeps the [`Reply`], the caller awaits the receiver.
+#[doc(hidden)]
+pub fn reply<R>() -> (Reply<R>, oneshot::Receiver<R>) {
+    let (respond_to, get_result) = oneshot::channel();
+    (Reply(respond_to), get_result)
+}
+
+/// How one queued call runs against the actor that owns the state.
+///
+/// Implemented by [`Job`](crate::Job), and by the message type a caller
+/// supplies in its place. It is monomorphised, so dispatching a call is a
+/// direct call and not a jump through a vtable.
+pub trait Dispatch<T>: Sized + Send + 'static {
+    /// Runs this call on the actor, answering its caller before returning.
+    fn dispatch(self, actor: &mut Actor<T>) -> impl Future<Output = ()> + Send;
+}
+
+impl<T> Actor<T> {
+    /// Answers one call.
+    ///
+    /// The caller is gone whenever it dropped the call before the actor got to
+    /// it, which is worth a line because it means the work was wasted.
+    pub fn respond<R>(&self, reply: Reply<R>, value: R) {
+        if reply.0.send(value).is_err() {
+            tracing::debug!(
+                actor_type = type_name::<T>(),
+                actor_id = self.id,
+                "Actor failed to respond as the receiver is dropped"
+            );
+        }
+    }
+}
+
 /// A single call on an actor, sent from a handle and run once by [`serve`].
 ///
 /// The lifetime is bound with `for<'a>` because the returned future borrows the
@@ -60,23 +108,36 @@ pub(crate) type ActorMethod<T> = Box<
         + Sync,
 >;
 
-/// One queued call on an actor of type `T`, as the job channel carries it.
+/// A call carried as a closure, which is how the handle's own closure-taking
+/// methods reach the actor.
 ///
-/// Opaque: it is named only to give a channel its item type, as in
-/// `flume::unbounded::<Job<Greeter>>()`.
 /// Every part is `Sync` as well as `Send`, so that a job is `Sync` and the
 /// channel carrying it can be too. A channel's sending half holds the item it
 /// is queueing, so a job that is not `Sync` would leave that half `!Sync`, and
 /// a handle has to be shareable.
-pub struct Job<T> {
+#[doc(hidden)]
+pub struct ClosureJob<T> {
     pub(crate) call: ActorMethod<T>,
     pub(crate) args: Box<dyn Any + Send + Sync>,
     pub(crate) respond_to: oneshot::Sender<Box<dyn Any + Send + Sync>>,
 }
 
-impl<T> Debug for Job<T> {
+impl<T> Debug for ClosureJob<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Job<{}>", type_name::<T>())
+        write!(f, "ClosureJob<{}>", type_name::<T>())
+    }
+}
+
+impl<T: Send + Sync + 'static> Dispatch<T> for ClosureJob<T> {
+    async fn dispatch(self, actor: &mut Actor<T>) {
+        let res = (self.call)(actor, self.args).await;
+        if self.respond_to.send(res).is_err() {
+            tracing::debug!(
+                actor_type = type_name::<T>(),
+                actor_id = actor.id,
+                "Actor failed to respond as the receiver is dropped"
+            );
+        }
     }
 }
 
@@ -137,10 +198,11 @@ impl Drop for ExitGuard {
 /// manual wrapper rather than `#[tracing::instrument]`: on an async fn the
 /// attribute creates its span at first poll, inside the spawned task, where
 /// the creation context is gone.
-pub(crate) fn serve<T, R>(rx: R, actor: Actor<T>) -> impl Future<Output = ()> + Send
+pub(crate) fn serve<T, M, R>(rx: R, actor: Actor<T>) -> impl Future<Output = ()> + Send
 where
     T: Send + Sync + 'static,
-    R: JobReceiver<Job<T>>,
+    M: Dispatch<T>,
+    R: JobReceiver<M>,
 {
     let span = tracing::info_span!(
         "actor",
@@ -151,23 +213,17 @@ where
     run(rx, actor).instrument(span)
 }
 
-async fn run<T, R>(mut rx: R, mut actor: Actor<T>)
+async fn run<T, M, R>(mut rx: R, mut actor: Actor<T>)
 where
     T: Send + Sync + 'static,
-    R: JobReceiver<Job<T>>,
+    M: Dispatch<T>,
+    R: JobReceiver<M>,
 {
     let _guard = ExitGuard {
         actor_type: type_name::<T>(),
         actor_id: actor.id,
     };
     while let Some(job) = rx.recv().await {
-        let res = (job.call)(&mut actor, job.args).await;
-        if job.respond_to.send(res).is_err() {
-            tracing::debug!(
-                actor_type = type_name::<T>(),
-                actor_id = actor.id,
-                "Actor failed to respond as the receiver is dropped"
-            );
-        }
+        job.dispatch(&mut actor).await;
     }
 }
