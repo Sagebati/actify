@@ -62,7 +62,7 @@ pub struct DefaultChannel;
 /// # struct Counter(i32);
 /// # #[actify(blocking)]
 /// # impl Counter {}
-/// let (handle, actor) = CounterHandle::builder(Counter(0)).build();
+/// let (mut handle, actor) = CounterHandle::builder(Counter(0)).build();
 /// let running = std::thread::spawn(actor);
 ///
 /// handle.set(Counter(1));

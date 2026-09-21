@@ -44,6 +44,9 @@ fn compile_fail_tests() {
     t.compile_fail("tests/compile_fail/async_method_in_blocking_block.rs");
     t.compile_fail("tests/compile_fail/by_value_self.rs");
 
+    // A handle sends through &mut, so one handle is one call at a time
+    t.compile_fail("tests/compile_fail/two_calls_on_one_handle.rs");
+
     // Names the generated handle already uses
     t.compile_fail("tests/compile_fail/reserved_method_name.rs");
 

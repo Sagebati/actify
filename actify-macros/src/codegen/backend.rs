@@ -73,6 +73,31 @@ pub fn new_doc(info: &ImplInfo) -> &'static str {
     }
 }
 
+/// How a handle's methods take the handle.
+///
+/// An async handle sends through a [`Sink`], which wants `&mut self`, and that
+/// is also what keeps one task at a time in front of the sender's single waker
+/// slot. A blocking handle's channel sends through `&self` and parks the
+/// calling thread, so it needs neither.
+///
+/// [`Sink`]: https://docs.rs/futures-sink/latest/futures_sink/trait.Sink.html
+pub fn receiver(info: &ImplInfo) -> TokenStream {
+    match info.backend {
+        Backend::Async => quote! { &mut self },
+        Backend::Blocking => quote! { &self },
+    }
+}
+
+/// What the generated handle's sender parameter has to be.
+///
+/// The async `JobSender` no longer requires `Clone`, but a handle is cloned by
+/// cloning its sender, so the handle asks for it here. The blocking one still
+/// carries `Clone` as a supertrait, and repeating it is harmless.
+pub fn sender_bound(info: &ImplInfo, call_ty: &TokenStream) -> TokenStream {
+    let root = root(info);
+    quote! { #root::JobSender<#call_ty> + ::std::clone::Clone }
+}
+
 /// The extra argument a blocking loop takes: how it waits for its next job.
 ///
 /// The async loop has no equivalent, because waiting for a future is the

@@ -48,7 +48,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("test", 10).await;
     /// let res = handle.get_key("test").await;
     /// assert_eq!(res, Some(10));
@@ -70,7 +70,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// let res = handle.insert("test", 10).await;
     /// assert_eq!(res, None);
     ///
@@ -92,7 +92,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("test", 10).await;
     /// let res = handle.remove("test").await;
     /// assert_eq!(res, Some(10));
@@ -115,7 +115,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("test", 10).await;
     /// handle.clear().await;
     /// assert!(handle.is_empty().await);
@@ -134,7 +134,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::<&str, i32>::new());
+    /// let mut handle = HashMapHandle::new(HashMap::<&str, i32>::new());
     /// assert!(handle.is_empty().await);
     /// # }
     /// ```
@@ -152,7 +152,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// handle.insert("b", 2).await;
     /// let mut keys = handle.keys().await;
@@ -174,7 +174,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// handle.insert("b", 2).await;
     /// let mut values = handle.values().await;
@@ -195,7 +195,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// handle.insert("b", 2).await;
     /// assert_eq!(handle.len().await, 2);
@@ -214,7 +214,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// assert!(handle.contains_key("a").await);
     /// assert!(!handle.contains_key("b").await);
@@ -233,7 +233,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.insert("a", 1).await;
     /// let items = handle.drain().await;
     /// assert_eq!(items, vec![("a", 1)]);
@@ -253,7 +253,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::new());
+    /// let mut handle = HashMapHandle::new(HashMap::new());
     /// handle.extend(vec![("a", 1), ("b", 2)]).await;
     /// assert_eq!(handle.len().await, 2);
     /// # }
@@ -276,7 +276,7 @@ where
     /// # use std::collections::HashMap;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashMapHandle::new(HashMap::from([("a", 1)]));
+    /// let mut handle = HashMapHandle::new(HashMap::from([("a", 1)]));
     /// assert_eq!(handle.remove_entry("a").await, Some(("a", 1)));
     /// assert_eq!(handle.remove_entry("a").await, None);
     /// # }
@@ -296,7 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_returns_every_pair_and_empties_the_map() {
-        let handle = map();
+        let mut handle = map();
 
         let mut drained = handle.drain().await;
         drained.sort();
@@ -307,7 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extend_adds_and_overwrites() {
-        let handle = map();
+        let mut handle = map();
 
         handle
             .extend(vec![("b".to_string(), 20), ("c".to_string(), 3)])
@@ -351,7 +351,7 @@ mod tests {
             id: 1,
             label: "lookup",
         };
-        let handle = HashMapHandle::new(HashMap::from([(stored, 7)]));
+        let mut handle = HashMapHandle::new(HashMap::from([(stored, 7)]));
 
         let (key, value) = handle.remove_entry(lookup.clone()).await.unwrap();
         assert_eq!(key.label, "stored");

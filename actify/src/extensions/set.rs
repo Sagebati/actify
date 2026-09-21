@@ -57,7 +57,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// let res = handle.insert(10).await;
     /// assert!(res);
     ///
@@ -78,7 +78,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::<i32>::new());
+    /// let mut handle = HashSetHandle::new(HashSet::<i32>::new());
     /// assert!(handle.is_empty().await);
     /// # }
     /// ```
@@ -95,7 +95,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// handle.insert(1).await;
     /// handle.insert(2).await;
     /// assert_eq!(handle.len().await, 2);
@@ -114,7 +114,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// handle.insert(1).await;
     /// handle.clear().await;
     /// assert!(handle.is_empty().await);
@@ -133,7 +133,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// handle.insert(1).await;
     /// assert!(handle.contains(1).await);
     /// assert!(!handle.contains(2).await);
@@ -152,7 +152,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// handle.insert(1).await;
     /// assert!(handle.remove(1).await);
     /// assert!(!handle.remove(1).await);
@@ -171,7 +171,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// handle.insert(1).await;
     /// let items = handle.to_vec().await;
     /// assert_eq!(items, vec![1]);
@@ -190,7 +190,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// handle.insert(1).await;
     /// let items = handle.drain().await;
     /// assert_eq!(items, vec![1]);
@@ -210,7 +210,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::new());
+    /// let mut handle = HashSetHandle::new(HashSet::new());
     /// handle.extend(vec![1, 2, 3]).await;
     /// assert_eq!(handle.len().await, 3);
     /// # }
@@ -228,7 +228,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
     /// let diff = handle.difference(HashSet::from([2, 3, 4])).await;
     /// assert_eq!(diff, vec![1]);
     /// # }
@@ -246,7 +246,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
     /// let mut inter = handle.intersection(HashSet::from([2, 3, 4])).await;
     /// inter.sort();
     /// assert_eq!(inter, vec![2, 3]);
@@ -265,7 +265,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1, 2]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1, 2]));
     /// let mut u = handle.union(HashSet::from([2, 3])).await;
     /// u.sort();
     /// assert_eq!(u, vec![1, 2, 3]);
@@ -284,7 +284,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1, 2]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1, 2]));
     /// assert!(handle.is_subset(HashSet::from([1, 2, 3])).await);
     /// assert!(!handle.is_subset(HashSet::from([1, 3])).await);
     /// # }
@@ -302,7 +302,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
     /// assert!(handle.is_superset(HashSet::from([1, 2])).await);
     /// assert!(!handle.is_superset(HashSet::from([1, 4])).await);
     /// # }
@@ -320,7 +320,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1, 2, 3]));
     /// assert!(handle.is_disjoint(HashSet::from([4, 5])).await);
     /// assert!(!handle.is_disjoint(HashSet::from([3, 4])).await);
     /// # }
@@ -343,7 +343,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1, 2]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1, 2]));
     /// assert_eq!(handle.take(1).await, Some(1));
     /// assert_eq!(handle.take(1).await, None);
     /// assert_eq!(handle.len().await, 1);
@@ -366,7 +366,7 @@ where
     /// # use std::collections::HashSet;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = HashSetHandle::new(HashSet::from([1]));
+    /// let mut handle = HashSetHandle::new(HashSet::from([1]));
     /// assert_eq!(handle.replace(1).await, Some(1));
     /// assert_eq!(handle.replace(2).await, None);
     /// assert_eq!(handle.len().await, 2);
@@ -394,7 +394,7 @@ mod tests {
     /// actor cannot leave it.
     #[tokio::test]
     async fn test_membership_changes() {
-        let handle = set();
+        let mut handle = set();
 
         assert!(handle.remove(1).await, "removing a member reports true");
         assert!(
@@ -412,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_algebra() {
-        let handle = set();
+        let mut handle = set();
         let other = HashSet::from([2, 3, 4]);
 
         assert_eq!(sorted(handle.difference(other.clone()).await), vec![1]);
@@ -462,7 +462,7 @@ mod tests {
             id: 1,
             label: "lookup",
         };
-        let handle = HashSetHandle::new(HashSet::from([stored.clone()]));
+        let mut handle = HashSetHandle::new(HashSet::from([stored.clone()]));
 
         handle.insert(lookup.clone()).await;
         assert_eq!(

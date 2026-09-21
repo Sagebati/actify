@@ -2,7 +2,6 @@ use futures_channel::oneshot;
 use std::any::type_name;
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use super::read_handle::ReadHandle;
 use crate::actor::reply;
@@ -70,9 +69,12 @@ impl<T: Clone> ToView<T> for T {
 /// actor itself. To expose a different type, implement [`ToView<V>`] and name
 /// it on the generated handle, as in `MyTypeHandle::<Summary>::new(val)`.
 pub struct Handle<T, V, M, S = DefaultSender<M>> {
-    // The `Arc` is what makes a handle one pointer wide and what stops the
-    // actor: the last handle to drop drops the only sending half with it.
-    sender: Arc<S>,
+    // Owned outright, not shared: a sending half sent through by `&mut` is one
+    // a bounded channel can refuse, and the channel counts handles rather than
+    // calls. The last handle to drop drops the last sending half with it, which
+    // is what stops the actor. A `futures_channel` sender is a niche-optimised
+    // `Option<Arc<_>>`, so the handle is still one pointer wide.
+    sender: S,
     actor: Marker<T, V, M>,
 }
 
@@ -88,10 +90,13 @@ pub type DefaultSender<M> = futures_channel::mpsc::UnboundedSender<M>;
 /// The receiving half of [`DefaultSender`], which the actor future reads.
 pub type DefaultReceiver<M> = futures_channel::mpsc::UnboundedReceiver<M>;
 
-impl<T, V, M, S> Clone for Handle<T, V, M, S> {
+/// Cloning a handle clones its sending half, which is the only clone actify
+/// makes. Every channel's sender is a cheap handle onto shared state, so it
+/// costs a reference count rather than a copy of the queue.
+impl<T, V, M, S: Clone> Clone for Handle<T, V, M, S> {
     fn clone(&self) -> Self {
         Handle {
-            sender: Arc::clone(&self.sender),
+            sender: self.sender.clone(),
             actor: PhantomData,
         }
     }
@@ -132,7 +137,7 @@ where
     /// # impl Counter {}
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = CounterHandle::new(Counter(1));
+    /// let mut handle = CounterHandle::new(Counter(1));
     /// assert_eq!(handle.get().await, Counter(1));
     /// # }
     /// ```
@@ -142,7 +147,7 @@ where
     /// Panics if the actor has stopped, either because one of its methods
     /// panicked or because its runtime shut down. See [Actor lifetime and
     /// panics](crate#actor-lifetime-and-panics).
-    pub async fn get(&self) -> V {
+    pub async fn get(&mut self) -> V {
         let (reply, get_result) = reply();
         self.__call(Builtin::Get(reply).into(), get_result).await
     }
@@ -155,7 +160,7 @@ where
     /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = OptionHandle::new(None);
+    /// let mut handle = OptionHandle::new(None);
     /// handle.set(Some(1)).await;
     /// assert_eq!(handle.get().await, Some(1));
     /// # }
@@ -166,7 +171,7 @@ where
     /// Panics if the actor has stopped, either because one of its methods
     /// panicked or because its runtime shut down. See [Actor lifetime and
     /// panics](crate#actor-lifetime-and-panics).
-    pub async fn set(&self, val: T) {
+    pub async fn set(&mut self, val: T) {
         let (reply, get_result) = reply();
         self.__call(Builtin::Set(val, reply).into(), get_result)
             .await
@@ -176,12 +181,17 @@ where
 impl<T, V, M, S> Handle<T, V, M, S> {
     pub(super) fn from_sender(sender: S) -> Self {
         Handle {
-            sender: Arc::new(sender),
+            sender,
             actor: PhantomData,
         }
     }
+}
 
+impl<T, V, M, S: Clone> Handle<T, V, M, S> {
     /// Returns a [`ReadHandle`] that provides read-only access to this actor.
+    ///
+    /// It carries a sending half of its own, so it keeps the actor alive on its
+    /// own and can be read from without the handle it came from.
     pub fn read_handle(&self) -> ReadHandle<T, V, M, S> {
         ReadHandle::new(self.clone())
     }
@@ -198,7 +208,7 @@ where
     /// The reply channel is the caller's to make, so that it carries the
     /// method's own return type rather than something erased.
     #[doc(hidden)]
-    pub async fn __call<R>(&self, message: M, get_result: oneshot::Receiver<R>) -> R {
+    pub async fn __call<R>(&mut self, message: M, get_result: oneshot::Receiver<R>) -> R {
         if self.sender.send(message).await.is_ok() {
             if let Ok(res) = get_result.await {
                 return res;
@@ -211,6 +221,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// An actor with no methods of its own, so its handle carries the
     /// built-in calls and nothing else. An empty `#[actify]` block is how an
@@ -227,7 +238,7 @@ mod tests {
     async fn test_a_built_actor_serves_once_the_caller_spawns_it() {
         let (handle, actor) = CounterHandle::builder(Counter(1)).build();
 
-        let caller = handle.clone();
+        let mut caller = handle.clone();
         let call = tokio::spawn(async move { caller.get().await });
 
         tokio::spawn(actor);
@@ -239,7 +250,7 @@ mod tests {
     /// nothing will ever serve the handle.
     #[tokio::test]
     async fn test_dropping_the_actor_future_leaves_a_dead_handle() {
-        let (handle, actor) = CounterHandle::builder(Counter(1)).build();
+        let (mut handle, actor) = CounterHandle::builder(Counter(1)).build();
         drop(actor);
 
         let result = tokio::spawn(async move { handle.get().await }).await;
@@ -263,7 +274,7 @@ mod tests {
     #[tokio::test]
     async fn test_actor_panic_is_reported_as_a_panic() {
         let handle = PanicStructHandle::new(PanicStruct {});
-        let clone = handle.clone();
+        let mut clone = handle.clone();
 
         let result = tokio::spawn(async move { clone.panic().await }).await;
 
@@ -286,7 +297,7 @@ mod tests {
     #[tokio::test]
     async fn test_async_actor_panic_is_reported_as_a_panic() {
         let handle = PanicStructHandle::new(PanicStruct {});
-        let clone = handle.clone();
+        let mut clone = handle.clone();
 
         let result = tokio::spawn(async move { clone.panic_async().await }).await;
 
@@ -308,9 +319,9 @@ mod tests {
     /// holding a handle to a dead actor.
     #[tokio::test]
     async fn test_actor_panic_is_reported_to_other_clones() {
-        let handle = PanicStructHandle::new(PanicStruct {});
-        let victim = handle.clone();
-        let bystander = handle.clone();
+        let mut handle = PanicStructHandle::new(PanicStruct {});
+        let mut victim = handle.clone();
+        let mut bystander = handle.clone();
 
         // The same call succeeds while the actor is alive, so the failure
         // below can only come from the actor being gone
@@ -341,7 +352,7 @@ mod tests {
             .unwrap();
 
         let handle = actor_rt.block_on(async {
-            let handle = CounterHandle::new(Counter(0));
+            let mut handle = CounterHandle::new(Counter(0));
             handle.set(Counter(42)).await;
             assert_eq!(handle.get().await.0, 42); // The actor served jobs normally
             handle
@@ -355,7 +366,7 @@ mod tests {
             .unwrap();
 
         caller_rt.block_on(async {
-            let orphaned = handle.clone();
+            let mut orphaned = handle.clone();
             let result = tokio::spawn(async move { orphaned.set(Counter(99)).await }).await;
 
             let message = panic_message(result.unwrap_err());
@@ -383,7 +394,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_a_non_clone_actor_can_be_read() {
-            let handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 1 });
+            let mut handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 1 });
 
             assert_eq!(handle.get().await, 1);
             assert_eq!(handle.read_handle().get().await, 1);
@@ -392,7 +403,7 @@ mod tests {
         /// The view hides the state, so a method is what reaches past it.
         #[tokio::test]
         async fn test_the_state_stays_reachable_through_a_method() {
-            let handle = big();
+            let mut handle = big();
 
             assert_eq!(handle.data().await, vec![1, 2, 3]);
         }
@@ -412,9 +423,9 @@ mod tests {
     /// channel while the job is still queued or running.
     #[tokio::test(start_paused = true)]
     async fn test_abandoned_call_does_not_stop_the_actor() {
-        let handle = SlowActorHandle::new(SlowActor {});
+        let mut handle = SlowActorHandle::new(SlowActor {});
 
-        let slow = handle.clone();
+        let mut slow = handle.clone();
         let abandoned =
             tokio::time::timeout(std::time::Duration::from_millis(10), slow.linger()).await;
         assert!(abandoned.is_err(), "the call should have timed out");
@@ -438,21 +449,122 @@ mod tests {
         }
     }
 
-    /// A caller asks for backpressure by supplying a bounded channel. Callers
-    /// past its capacity then wait for a slot instead of failing, so every job
-    /// is still served. The sleep in each job holds the actor long enough for
-    /// all of them to pile up.
-    #[tokio::test(start_paused = true)]
-    async fn test_callers_wait_when_a_bounded_job_channel_is_full() {
+    /// Counts what a channel actually accepted, which is the only place
+    /// backpressure is visible.
+    ///
+    /// Awaiting a call cannot show it: a call waits for its reply as well as
+    /// for its slot, so a caller that got queued and one that did not look
+    /// alike from the outside. `start_send` is where the queue says yes.
+    struct Counted<M>(
+        futures_channel::mpsc::Sender<M>,
+        std::sync::Arc<AtomicUsize>,
+    );
+
+    // Derived `Clone` would demand `M: Clone`; a sender clones whatever it
+    // carries.
+    impl<M> Clone for Counted<M> {
+        fn clone(&self) -> Self {
+            Counted(self.0.clone(), std::sync::Arc::clone(&self.1))
+        }
+    }
+
+    impl<M> futures_sink::Sink<M> for Counted<M> {
+        type Error = futures_channel::mpsc::SendError;
+
+        fn poll_ready(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::pin::Pin::new(&mut self.0).poll_ready(cx)
+        }
+
+        fn start_send(mut self: std::pin::Pin<&mut Self>, item: M) -> Result<(), Self::Error> {
+            self.1.fetch_add(1, Ordering::Relaxed);
+            std::pin::Pin::new(&mut self.0).start_send(item)
+        }
+
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::pin::Pin::new(&mut self.0).poll_flush(cx)
+        }
+
+        fn poll_close(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::pin::Pin::new(&mut self.0).poll_close(cx)
+        }
+    }
+
+    /// A bounded channel's ceiling is its buffer plus one slot per handle,
+    /// whatever number of calls those handles make.
+    ///
+    /// That is `futures_channel`'s contract - `buffer + num_senders` - and
+    /// under `&mut` sending a sender is a handle, so the ceiling is something
+    /// a program sets rather than something its call volume sets. Here eight
+    /// slots hold back a thousand calls.
+    ///
+    /// What this does *not* prove is the thing that would be nice to prove.
+    /// Concurrent callers need a handle each either way, so the old
+    /// clone-per-send code bounded the queue at `buffer + calls in flight`,
+    /// which for this shape is the same number. The difference between the two
+    /// is not observable from here: it is that a single handle can no longer
+    /// have two sends in flight, which the borrow checker now refuses, and
+    /// that a send no longer allocates a sender. `compile_fail/
+    /// two_calls_on_one_handle.rs` pins the first; `allocations.rs` pins the
+    /// second.
+    #[tokio::test]
+    async fn test_a_bounded_job_channel_stops_accepting_while_the_actor_is_busy() {
         const CAPACITY: usize = 4;
-        let (handle, actor) = LedgerHandle::builder(Ledger { seen: Vec::new() })
+        const HANDLES: usize = 4;
+        const CALLS_EACH: usize = 250;
+        const CALLS: usize = HANDLES * CALLS_EACH;
+
+        let accepted = std::sync::Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = futures_channel::mpsc::channel(CAPACITY);
+        let (handle, actor) = SlowActorHandle::builder(SlowActor {})
+            .channel((Counted(tx, std::sync::Arc::clone(&accepted)), rx))
+            .build();
+        tokio::spawn(actor);
+
+        // Every call after the first queues behind it, and the first sleeps a
+        // second, so nothing drains while this is measured.
+        let mut calls = tokio::task::JoinSet::new();
+        for _ in 0..HANDLES {
+            let mut handle = handle.clone();
+            calls.spawn(async move {
+                for _ in 0..CALLS_EACH {
+                    handle.linger().await;
+                }
+            });
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let accepted = accepted.load(Ordering::Relaxed);
+        assert!(
+            accepted <= CAPACITY + HANDLES,
+            "a channel bounded at {CAPACITY} with {HANDLES} handles accepted {accepted} \
+             of {CALLS} calls while the actor was still on the first"
+        );
+
+        calls.abort_all();
+    }
+
+    /// Backpressure must not lose jobs: a caller that waits for a slot still
+    /// gets served, so every job arrives.
+    #[tokio::test(start_paused = true)]
+    async fn test_callers_wait_rather_than_fail_when_the_channel_is_full() {
+        const CAPACITY: usize = 4;
+        let (mut handle, actor) = LedgerHandle::builder(Ledger { seen: Vec::new() })
             .channel(futures_channel::mpsc::channel(CAPACITY))
             .build();
         tokio::spawn(actor);
 
         let mut calls = tokio::task::JoinSet::new();
         for i in 0..8 * CAPACITY {
-            let handle = handle.clone();
+            let mut handle = handle.clone();
             calls.spawn(async move { handle.record(i).await });
         }
         while calls.join_next().await.is_some() {}
@@ -467,11 +579,11 @@ mod tests {
     /// would make the sends alone outlive the actor's first job.
     #[tokio::test(start_paused = true)]
     async fn test_the_default_channel_never_makes_a_caller_wait_to_queue() {
-        let handle = LedgerHandle::new(Ledger { seen: Vec::new() });
+        let mut handle = LedgerHandle::new(Ledger { seen: Vec::new() });
 
         let mut calls = tokio::task::JoinSet::new();
         for i in 0..1000 {
-            let handle = handle.clone();
+            let mut handle = handle.clone();
             calls.spawn(async move { handle.record(i).await });
         }
         while calls.join_next().await.is_some() {}
@@ -549,13 +661,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_non_clone_actor() {
-        let handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
+        let mut handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
         assert_eq!(handle.get_value().await, 42);
 
         handle.set_value(100).await;
         assert_eq!(handle.get_value().await, 100);
 
-        let handle2 = handle.clone();
+        let mut handle2 = handle.clone();
         assert_eq!(handle2.get_value().await, 100);
     }
 
@@ -563,7 +675,7 @@ mod tests {
     /// type itself must also keep current.
     #[tokio::test]
     async fn test_non_clone_actor_is_read_through_its_view() {
-        let handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
+        let mut handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
 
         handle.set_value(100).await;
         assert_eq!(handle.get().await, 100);
@@ -619,7 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clone_actor_with_custom_view() {
-        let handle = BigStateHandle::<usize>::new(BigState {
+        let mut handle = BigStateHandle::<usize>::new(BigState {
             data: vec![1, 2, 3],
             count: 3,
         });

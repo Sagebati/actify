@@ -36,6 +36,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     let root = backend::root(info);
     let asyncness = backend::asyncness(info);
     let awaiter = backend::awaiter(info);
+    let receiver = backend::receiver(info);
 
     let declared = declared_params(info);
     let names = param_names(info);
@@ -48,13 +49,22 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     bare.params.push(syn::parse_quote!(#sender));
     let (bare_generics, _, _) = bare.split_for_impl();
 
+    // A handle is cloned by cloning its sending half, so it is `Clone` exactly
+    // when that is.
+    let mut cloneable = info.generics.clone();
+    cloneable.params.push(syn::parse_quote!(#view));
+    cloneable
+        .params
+        .push(syn::parse_quote!(#sender: ::std::clone::Clone));
+    let (clone_generics, _, _) = cloneable.split_for_impl();
+
     // What every call on this handle needs: a view the actor can produce, and
     // a channel that carries this actor's messages.
+    let sender_bound = backend::sender_bound(info, &call_ty);
     let mut full = info.generics.clone();
     full.params
         .push(syn::parse_quote!(#view: ::std::clone::Clone + Send + Sync + 'static));
-    full.params
-        .push(syn::parse_quote!(#sender: #root::JobSender<#call_ty>));
+    full.params.push(syn::parse_quote!(#sender: #sender_bound));
     full.make_where_clause()
         .predicates
         .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
@@ -92,7 +102,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         );
 
         #(#attrs)*
-        impl #bare_generics ::std::clone::Clone for #handle_ty {
+        impl #clone_generics ::std::clone::Clone for #handle_ty {
             fn clone(&self) -> Self {
                 #handle(::std::clone::Clone::clone(&self.0))
             }
@@ -140,7 +150,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
             /// # Panics
             ///
             /// Panics if the actor has stopped.
-            pub #asyncness fn get(&self) -> #view {
+            pub #asyncness fn get(#receiver) -> #view {
                 self.0.get() #awaiter
             }
 
@@ -149,7 +159,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
             /// # Panics
             ///
             /// Panics if the actor has stopped.
-            pub #asyncness fn set(&self, __actify_val: #impl_type) {
+            pub #asyncness fn set(#receiver, __actify_val: #impl_type) {
                 self.0.set(__actify_val) #awaiter
             }
 
@@ -233,6 +243,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
     let call_ty = call_type(info, &view);
     let root = backend::root(info);
     let actor_type = backend::actor_type(info);
+    let sender_bound = backend::sender_bound(info, &call_ty);
 
     let declared = declared_params(info);
     let names = param_names(info);
@@ -255,7 +266,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
     let mut own_channel = common.clone();
     own_channel
         .params
-        .push(syn::parse_quote!(__ActifyTx: #root::JobSender<#call_ty>));
+        .push(syn::parse_quote!(__ActifyTx: #sender_bound));
     own_channel
         .params
         .push(syn::parse_quote!(__ActifyRx: #root::JobReceiver<#call_ty>));
@@ -319,7 +330,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
                 __actify_channel: (__ActifyTx, __ActifyRx),
             ) -> #builder<#(#names,)* #view, (__ActifyTx, __ActifyRx)>
             where
-                __ActifyTx: #root::JobSender<#call_ty>,
+                __ActifyTx: #sender_bound,
                 __ActifyRx: #root::JobReceiver<#call_ty>,
             {
                 #builder(self.0.channel(__actify_channel))
@@ -385,6 +396,7 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
     let root = backend::root(info);
     let asyncness = backend::asyncness(info);
     let awaiter = backend::awaiter(info);
+    let receiver = backend::receiver(info);
     // `#[deprecated]` and `#[must_use]` belong here, on the method a caller
     // reaches for, which is now the only place they are written.
     let attrs = &method.attributes;
@@ -414,7 +426,7 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
 
     quote! {
         #(#attrs)*
-        pub #asyncness fn #ident #method_generics(&self, #(#arg_names: #arg_types),*) #return_type
+        pub #asyncness fn #ident #method_generics(#receiver, #(#arg_names: #arg_types),*) #return_type
         #where_clause
         {
             let (__actify_reply, __actify_rx) = #root::__private::reply();

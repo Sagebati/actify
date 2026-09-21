@@ -58,7 +58,7 @@ pub struct DefaultChannel;
 /// # impl Counter {}
 /// # #[tokio::main]
 /// # async fn main() {
-/// let (handle, actor) = CounterHandle::builder(Counter(0)).build();
+/// let (mut handle, actor) = CounterHandle::builder(Counter(0)).build();
 /// tokio::spawn(actor);
 ///
 /// handle.set(Counter(1)).await;
@@ -79,7 +79,7 @@ pub struct DefaultChannel;
 /// # async fn main() {
 /// let (tx, rx) = futures_channel::mpsc::channel(8);
 ///
-/// let (handle, actor) = CounterHandle::builder(Counter(0)).channel((tx, rx)).build();
+/// let (mut handle, actor) = CounterHandle::builder(Counter(0)).channel((tx, rx)).build();
 /// tokio::spawn(actor);
 ///
 /// assert_eq!(handle.get().await, Counter(0));
@@ -125,7 +125,11 @@ where
     /// kept back would outlive the last handle and keep the actor running.
     ///
     /// Whether a call waits to be queued is the channel's choice, so a bounded
-    /// channel is how backpressure is asked for.
+    /// channel is how backpressure is asked for. What it bounds is the
+    /// channel's business: `futures_channel` holds `buffer + one slot per
+    /// sender`, and a handle is a sender, so a program raises its own ceiling
+    /// by cloning handles. Concurrency costs handles either way, since a
+    /// handle sends through `&mut` and so carries one call at a time.
     pub fn channel<S, R>(self, channel: (S, R)) -> HandleBuilder<T, V, M, (S, R)>
     where
         S: JobSender<M>,

@@ -180,7 +180,7 @@ mod send_calls {
     /// Requires the call's future to be `Send`, spelled out rather than
     /// reached through `tokio::spawn`, which is where the requirement comes
     /// from in practice.
-    pub async fn read(handle: &ThermostatHandle) -> i32 {
+    pub async fn read(handle: &mut ThermostatHandle) -> i32 {
         fn require_send<F: Send>(future: F) -> F {
             future
         }
@@ -453,7 +453,7 @@ mod tests {
     async fn test_shadowed_std_names() {
         use crate::shadowed_std_names::{ShadowedStdNames, ShadowedStdNamesHandle};
 
-        let handle = ShadowedStdNamesHandle::new(ShadowedStdNames { value: 7 });
+        let mut handle = ShadowedStdNamesHandle::new(ShadowedStdNames { value: 7 });
 
         assert_eq!(handle.value().await, 7);
     }
@@ -465,9 +465,9 @@ mod tests {
     async fn test_a_generic_caller_can_require_a_send_future() {
         use crate::send_calls::{Thermostat, ThermostatHandle, read};
 
-        let handle = ThermostatHandle::new(Thermostat { celsius: 21 });
+        let mut handle = ThermostatHandle::new(Thermostat { celsius: 21 });
 
-        assert_eq!(read(&handle).await, 21);
+        assert_eq!(read(&mut handle).await, 21);
     }
 
     /// The skipped method stays on the type, the other one reaches the handle.
@@ -482,7 +482,7 @@ mod tests {
 
         assert_eq!(ledger.entries.len(), 2);
 
-        let handle = LedgerHandle::new(ledger);
+        let mut handle = LedgerHandle::new(ledger);
 
         assert_eq!(handle.count().await, 2);
     }
@@ -491,7 +491,7 @@ mod tests {
     /// all, whether they read or write.
     #[tokio::test]
     async fn test_one_handle_carries_every_method_of_a_block() {
-        let handle = SomeStructHandle::new(SomeStruct { inner_bool: false });
+        let mut handle = SomeStructHandle::new(SomeStruct { inner_bool: false });
 
         handle.set_true().await;
         assert!(handle.get_inner().await);
@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_complex_arg_types() {
-        let handle = ComplexActorTypesHandle::new(ComplexActorTypes);
+        let mut handle = ComplexActorTypesHandle::new(ComplexActorTypes);
 
         assert_eq!(handle.with_array([10, 20, 30, 40]).await, 10);
         assert_eq!(
@@ -525,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_attribute_propagation() {
-        let handle = AttributeTestActorHandle::new(AttributeTestActor);
+        let mut handle = AttributeTestActorHandle::new(AttributeTestActor);
 
         // #[doc] is propagated to the handle trait; the call only needs to compile
         assert_eq!(handle.with_doc(5).await, 5);
@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(handle.some_os_specific_method().await, 2.);
 
         // #[cfg] on the impl block gates all generated traits and impls
-        let cfg_handle = CfgImplActorHandle::new(CfgImplActor);
+        let mut cfg_handle = CfgImplActorHandle::new(CfgImplActor);
         #[cfg(target_os = "linux")]
         assert_eq!(cfg_handle.platform_value().await, "linux");
         #[cfg(target_os = "windows")]
@@ -562,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_macro() {
-        let actor_handle = TestStructHandle::new(TestStruct {
+        let mut actor_handle = TestStructHandle::new(TestStruct {
             inner_data: "Test".to_string(),
         });
 
@@ -574,7 +574,7 @@ mod tests {
     /// trait reference or the call expression, where they are not valid syntax
     #[tokio::test]
     async fn test_inline_generic_bounds() {
-        let handle = InlineBoundsHandle::new(InlineBounds { value: 7_i32 });
+        let mut handle = InlineBoundsHandle::new(InlineBounds { value: 7_i32 });
         assert_eq!(handle.get_value().await, 7);
     }
 
@@ -582,7 +582,7 @@ mod tests {
     /// `Wrapper<T>` reconstructed from the impl block's generic parameters
     #[tokio::test]
     async fn test_non_identity_generic_argument() {
-        let handle = WrapperHandle::new(Wrapper {
+        let mut handle = WrapperHandle::new(Wrapper {
             items: vec![1_u8, 2, 3],
         });
         assert_eq!(handle.first_item().await, Some(1));
@@ -592,13 +592,13 @@ mod tests {
     /// though borrows of the actor's own state are rejected
     #[tokio::test]
     async fn test_static_reference_return() {
-        let handle = CfgImplActorHandle::new(CfgImplActor);
+        let mut handle = CfgImplActorHandle::new(CfgImplActor);
         assert!(!handle.platform_value().await.is_empty());
     }
 
     #[tokio::test]
     async fn test_impl_level_const_generic() {
-        let handle = ConstActorHandle::new(ConstActor { data: [0_u8; 4] });
+        let mut handle = ConstActorHandle::new(ConstActor { data: [0_u8; 4] });
         assert_eq!(handle.slots().await, 4);
     }
 
@@ -606,7 +606,7 @@ mod tests {
     /// the identifiers the macro uses internally in the generated method body
     #[tokio::test]
     async fn test_shadowing_arg_names() {
-        let handle = ShadowingActorHandle::new(ShadowingActor {
+        let mut handle = ShadowingActorHandle::new(ShadowingActor {
             value: String::new(),
         });
 
@@ -619,7 +619,7 @@ mod tests {
     /// actor out of a type with no methods worth exposing.
     #[tokio::test]
     async fn test_an_empty_block_gives_a_handle_with_the_built_in_calls() {
-        let handle = PlainHandle::new(Plain(1));
+        let mut handle = PlainHandle::new(Plain(1));
 
         assert_eq!(handle.get().await, Plain(1));
 
@@ -655,8 +655,8 @@ mod tests {
     /// this; the test keeps that statement true.
     #[tokio::test(start_paused = true)]
     async fn test_actors_calling_each_other_never_complete() {
-        let parser = ParserHandle::new(Parser { store: None });
-        let store = StoreHandle::new(Store { parser: None });
+        let mut parser = ParserHandle::new(Parser { store: None });
+        let mut store = StoreHandle::new(Store { parser: None });
 
         parser
             .set(Parser {
@@ -677,7 +677,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_vec() {
-        let actor_handle = VecHandle::new(vec![1, 2, 3]);
+        let mut actor_handle = VecHandle::new(vec![1, 2, 3]);
 
         assert_eq!(actor_handle.drain(1..).await, vec![2, 3]);
         assert_eq!(actor_handle.get().await, vec![1]);
@@ -685,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_instrument_attr_stripped_from_handle() {
-        let handle = InstrumentedActorHandle::new(InstrumentedActor { value: 10 });
+        let mut handle = InstrumentedActorHandle::new(InstrumentedActor { value: 10 });
 
         assert_eq!(handle.get_value().await, 10);
         handle.set_value(42).await;
@@ -696,7 +696,8 @@ mod tests {
     #[tokio::test]
     async fn test_unqualified_instrument_attr() {
         // Same test with unqualified `#[instrument]` (single-segment path)
-        let handle = UnqualifiedInstrumentActorHandle::new(UnqualifiedInstrumentActor { count: 0 });
+        let mut handle =
+            UnqualifiedInstrumentActorHandle::new(UnqualifiedInstrumentActor { count: 0 });
 
         assert_eq!(handle.increment().await, 1);
         assert_eq!(handle.increment().await, 2);
@@ -708,7 +709,7 @@ mod tests {
     /// from it.
     #[tokio::test]
     async fn test_interior_mutability_is_visible_through_the_view() {
-        let handle = InteriorMutabilityActorHandle::<i32>::new(InteriorMutabilityActor {
+        let mut handle = InteriorMutabilityActorHandle::<i32>::new(InteriorMutabilityActor {
             value: Mutex::new(0),
         });
 
@@ -863,7 +864,7 @@ mod tests {
         let baseline = alive_tasks();
 
         let handle = PlainHandle::new(Plain(1));
-        let read_handle = handle.read_handle();
+        let mut read_handle = handle.read_handle();
 
         let with_handle = await_alive_tasks(baseline + 1).await;
         assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
@@ -904,8 +905,11 @@ struct Store {
 
 #[actify]
 impl Parser {
+    /// Calling out through a handle this actor holds needs `&mut` on that
+    /// handle, and `&self` cannot give it. Cloning the handle does, at the
+    /// cost of one sending half. This is the pattern the crate documents.
     async fn parse(&self) {
-        self.store.as_ref().unwrap().save().await;
+        self.store.clone().unwrap().save().await;
     }
 
     async fn is_ready(&self) -> bool {
@@ -916,6 +920,6 @@ impl Parser {
 #[actify]
 impl Store {
     async fn save(&self) {
-        self.parser.as_ref().unwrap().is_ready().await;
+        self.parser.clone().unwrap().is_ready().await;
     }
 }

@@ -39,7 +39,7 @@ async fn stops(actor: impl Future<Output = ()>) {
 
 #[tokio::test]
 async fn test_the_default_channel_serves_an_actor() {
-    let (handle, actor) = GreeterHandle::builder(greeter()).build();
+    let (mut handle, actor) = GreeterHandle::builder(greeter()).build();
     let task = tokio::spawn(actor);
 
     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
@@ -53,7 +53,7 @@ async fn test_the_default_channel_serves_an_actor() {
 #[tokio::test]
 async fn test_flume_serves_an_actor() {
     let (tx, rx) = flume::unbounded();
-    let (handle, actor) = GreeterHandle::builder(greeter())
+    let (mut handle, actor) = GreeterHandle::builder(greeter())
         .channel((tx.into_sink(), rx.into_stream()))
         .build();
     let task = tokio::spawn(actor);
@@ -69,7 +69,7 @@ async fn test_flume_serves_an_actor() {
 #[tokio::test]
 async fn test_a_tokio_mpsc_serves_an_actor() {
     let (tx, rx) = tokio::sync::mpsc::channel(8);
-    let (handle, actor) = GreeterHandle::builder(greeter())
+    let (mut handle, actor) = GreeterHandle::builder(greeter())
         .channel((
             tokio_util::sync::PollSender::new(tx),
             tokio_stream::wrappers::ReceiverStream::new(rx),
@@ -87,7 +87,7 @@ async fn test_a_tokio_mpsc_serves_an_actor() {
 /// one runtime and served on another. Tokio is only ever the caller's choice.
 #[test]
 fn test_an_actor_is_served_wherever_the_caller_spawns_it() {
-    let (handle, actor) = GreeterHandle::builder(greeter()).build();
+    let (mut handle, actor) = GreeterHandle::builder(greeter()).build();
 
     let served = std::thread::spawn(move || futures_executor::block_on(actor));
 

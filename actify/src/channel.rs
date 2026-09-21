@@ -29,17 +29,24 @@ impl std::error::Error for Closed {}
 
 /// The sending half of an actor's job channel, as a [`Handle`] holds it.
 ///
-/// Sending takes `&self` because a handle is shared and cloned freely. Every
-/// channel crate sends that way; [`Sink`] does not, which is what the blanket
-/// implementation below bridges.
+/// Sending takes `&mut self`, which is what a [`Sink`] wants and what makes a
+/// bound mean anything: a handle owns one sending half and shares it with
+/// nobody, so the channel's own accounting of how many senders exist is the
+/// number of live handles. It also settles who owns the waker. A
+/// [`futures_channel`] sender parks exactly one task at a time, so two tasks
+/// polling one sender would overwrite each other's waker; `&mut self` makes
+/// that impossible to write.
+///
+/// A handle is still shared and cloned freely. Cloning one clones its sender,
+/// which is the only clone there is.
 ///
 /// [`Handle`]: crate::Handle
-pub trait JobSender<M>: Clone + Send + Sync + 'static {
+pub trait JobSender<M>: Send + 'static {
     /// Sends one job, waiting only if the channel applies backpressure.
     ///
     /// An unbounded channel never waits, which is what actify's own default
     /// is, so a call's `await` covers the reply alone.
-    fn send(&self, job: M) -> impl Future<Output = Result<(), Closed>> + Send;
+    fn send(&mut self, job: M) -> impl Future<Output = Result<(), Closed>> + Send;
 }
 
 /// The receiving half of an actor's job channel, as the actor future reads it.
@@ -54,24 +61,22 @@ pub trait JobReceiver<M>: Send + 'static {
     fn recv(&mut self) -> impl Future<Output = Option<M>> + Send;
 }
 
-/// Any [`Sink`] that a shared handle can send through.
+/// Any [`Sink`] a handle can send through.
 ///
-/// `Clone` is what makes `&self` sending possible: a sink sends through
-/// `&mut self`, so each call sends through its own clone. Every channel's
-/// sender is a cheap handle onto shared state, so the clone costs a reference
-/// count rather than a copy of the queue.
+/// The handle's own sink, sent through directly. Nothing is cloned here, which
+/// is what lets a bounded sink refuse: a sender it has already parked reports
+/// itself unready, and a fresh clone never would.
 impl<M, S> JobSender<M> for S
 where
     M: Send + 'static,
-    S: Sink<M> + Clone + Unpin + Send + Sync + 'static,
+    S: Sink<M> + Unpin + Send + 'static,
 {
-    async fn send(&self, job: M) -> Result<(), Closed> {
-        let mut sink = self.clone();
-        poll_fn(|cx| Pin::new(&mut sink).poll_ready(cx))
+    async fn send(&mut self, job: M) -> Result<(), Closed> {
+        poll_fn(|cx| Pin::new(&mut *self).poll_ready(cx))
             .await
             .map_err(|_| Closed)?;
-        Pin::new(&mut sink).start_send(job).map_err(|_| Closed)?;
-        poll_fn(|cx| Pin::new(&mut sink).poll_flush(cx))
+        Pin::new(&mut *self).start_send(job).map_err(|_| Closed)?;
+        poll_fn(|cx| Pin::new(&mut *self).poll_flush(cx))
             .await
             .map_err(|_| Closed)
     }

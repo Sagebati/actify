@@ -39,7 +39,7 @@
 //! #[tokio::main]
 //! async fn main() {
 //!     // An actify handle is created and initialized with the Greeter struct
-//!     let handle = GreeterHandle::new(Greeter {});
+//!     let mut handle = GreeterHandle::new(Greeter {});
 //!
 //!     // The say_hi method is made available on its handle through the actify! macro
 //!     let greeting = handle.say_hi("Alfred".to_string()).await;
@@ -95,7 +95,7 @@
 //!         GreeterHandle(actify::__private::spawn(val, run_greeter))
 //!     }
 //!
-//!     pub async fn say_hi(&self, name: String) -> String {
+//!     pub async fn say_hi(&mut self, name: String) -> String {
 //!         let (reply, get_result) = reply();
 //!         self.0.__call(GreeterCall::SayHi { name, reply }, get_result).await
 //!     }
@@ -103,7 +103,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = GreeterHandle::new(Greeter {});
+//!     let mut handle = GreeterHandle::new(Greeter {});
 //!     let greeting = handle.say_hi("Alfred".to_string()).await;
 //!     assert_eq!(greeting, "hi Alfred".to_string())
 //! }
@@ -125,7 +125,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = AsyncGreeterHandle::new(AsyncGreeter {});
+//!     let mut handle = AsyncGreeterHandle::new(AsyncGreeter {});
 //!     let greeting = handle.async_hi("Alfred".to_string()).await;
 //!     assert_eq!(greeting, "hi Alfred".to_string())
 //! }
@@ -153,7 +153,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = GenericGreeterHandle::new(GenericGreeter { inner: usize::default() });
+//!     let mut handle = GenericGreeterHandle::new(GenericGreeter { inner: usize::default() });
 //!     let greeting = handle.generic_hi("Alfred".to_string()).await;
 //!     assert_eq!(greeting, "hi Alfred from 0".to_string())
 //! }
@@ -192,7 +192,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = GreeterHandle::new(Greeter {});
+//!     let mut handle = GreeterHandle::new(Greeter {});
 //!     let result = handle.apply(5, |x| x * 2).await;
 //!     assert_eq!(result, 10);
 //! }
@@ -218,7 +218,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = SorterHandle::new(Sorter { values: vec![3, 1, 2] });
+//!     let mut handle = SorterHandle::new(Sorter { values: vec![3, 1, 2] });
 //!     assert_eq!(handle.sorted().await, vec![1, 2, 3]);
 //! }
 //!```
@@ -253,7 +253,7 @@
 //! # }
 //! #[tokio::main]
 //! async fn main() {
-//!     let (handle, actor) = GreeterHandle::builder(Greeter {}).build();
+//!     let (mut handle, actor) = GreeterHandle::builder(Greeter {}).build();
 //!     tokio::spawn(actor);
 //!
 //!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
@@ -278,7 +278,7 @@
 //! async fn main() {
 //!     let (tx, rx) = futures_channel::mpsc::channel(32);
 //!
-//!     let (handle, actor) = GreeterHandle::builder(Greeter {}).channel((tx, rx)).build();
+//!     let (mut handle, actor) = GreeterHandle::builder(Greeter {}).channel((tx, rx)).build();
 //!     tokio::spawn(actor);
 //!
 //!     assert_eq!(handle.say_hi("Alfred".to_string()).await, "hi Alfred");
@@ -319,7 +319,7 @@
 //!     }
 //! }
 //!
-//! let handle = CounterHandle::new(Counter(0));
+//! let mut handle = CounterHandle::new(Counter(0));
 //! assert_eq!(handle.add(2), 2);
 //! assert_eq!(handle.get(), Counter(2));
 //! ```
@@ -406,7 +406,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let handle = CounterHandle::new(Counter { value: 0 });
+//!     let mut handle = CounterHandle::new(Counter { value: 0 });
 //!     handle.increment().await;
 //!     assert_eq!(handle.value().await, 1);
 //! }
@@ -455,9 +455,48 @@
 //!
 //! Jobs queue in the channel the actor was built with. The default is
 //! unbounded, so queueing a call never waits and the only thing a call awaits
-//! is its reply. A bounded channel, passed to
-//! [`HandleBuilder::channel`], is how backpressure is asked
-//! for instead.
+//! is its reply. A bounded channel, passed to [`HandleBuilder::channel`], is
+//! how backpressure is asked for instead: a caller then waits for a slot
+//! rather than queueing without limit. How much it holds is the channel's own
+//! rule - `futures_channel` holds `buffer + one slot per sender` - and a
+//! handle is a sender, so a program that clones a handle per task raises its
+//! own ceiling.
+//!
+//! # Handles are `&mut` to call
+//!
+//! A handle sends through its own sending half, by `&mut`, so one handle
+//! carries one call at a time. Cloning it is how two callers proceed at once,
+//! and it costs one sending half - a reference count, not a queue.
+//!
+//! The usual shape is unaffected: a handle cloned into a task is owned there,
+//! and an owned handle gives `&mut` for free. What changes is a handle kept in
+//! a struct, which a `&self` method can no longer call through:
+//!
+//! ```
+//! # use actify::actify;
+//! # #[derive(Clone, Debug)]
+//! # struct Counter(i32);
+//! # #[actify]
+//! # impl Counter {
+//! #     fn add(&mut self, value: i32) -> i32 { self.0 += value; self.0 }
+//! # }
+//! struct Service {
+//!     counter: CounterHandle,
+//! }
+//!
+//! impl Service {
+//!     // Takes `&mut self`, and calls through the handle it owns.
+//!     async fn bump(&mut self) -> i32 {
+//!         self.counter.add(1).await
+//!     }
+//!
+//!     // Or keeps `&self`, and clones the handle to get a sending half of
+//!     // its own.
+//!     async fn peek(&self) -> Counter {
+//!         self.counter.clone().get().await
+//!     }
+//! }
+//! ```
 //!
 //! Two actors that call each other never return: each waits for a reply the
 //! other can only produce once it is free. The same holds for a method calling
@@ -478,7 +517,7 @@
 //! #[actify]
 //! impl Parser {
 //!     async fn parse(&self) {
-//!         self.store.as_ref().unwrap().save().await;
+//!         self.store.clone().unwrap().save().await;
 //!     }
 //!
 //!     async fn is_ready(&self) -> bool {
@@ -490,7 +529,7 @@
 //! impl Store {
 //!     async fn save(&self) {
 //!         // Parser is still inside parse, so this call is never served
-//!         self.parser.as_ref().unwrap().is_ready().await;
+//!         self.parser.clone().unwrap().is_ready().await;
 //!     }
 //! }
 //! ```

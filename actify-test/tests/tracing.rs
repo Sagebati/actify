@@ -105,7 +105,7 @@ fn parse_spawned_at(line: &str) -> &str {
 async fn test_actor_methods_run_inside_the_actor_span() {
     let (_guard, output) = capture();
 
-    let handle = ProbeHandle::new(Probe);
+    let mut handle = ProbeHandle::new(Probe);
     handle.log("emitted by an actor method".to_string()).await;
 
     let output = output.contents();
@@ -125,8 +125,8 @@ async fn test_actor_methods_run_inside_the_actor_span() {
 async fn test_same_type_actors_are_distinguishable_on_the_span() {
     let (_guard, output) = capture();
 
-    let first = ProbeHandle::new(Probe);
-    let second = ProbeHandle::new(Probe); // Its own line, so its own spawn site
+    let mut first = ProbeHandle::new(Probe);
+    let mut second = ProbeHandle::new(Probe); // Its own line, so its own spawn site
 
     first.log("first probe".to_string()).await;
     second.log("second probe".to_string()).await;
@@ -184,7 +184,7 @@ async fn test_a_panicking_actor_reports_its_exit_as_an_error() {
     let (_guard, output) = capture();
 
     let handle = ProbeHandle::new(Probe);
-    let caller = handle.clone();
+    let mut caller = handle.clone();
     let _ = tokio::spawn(async move { caller.boom().await }).await;
 
     let output = output.contents();

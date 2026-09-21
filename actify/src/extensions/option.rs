@@ -32,7 +32,7 @@ where
     /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = OptionHandle::new(Some(1));
+    /// let mut handle = OptionHandle::new(Some(1));
     /// assert!(handle.is_some().await);
     /// # }
     /// ```
@@ -48,7 +48,7 @@ where
     /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = OptionHandle::new(Option::<i32>::None);
+    /// let mut handle = OptionHandle::new(Option::<i32>::None);
     /// assert!(handle.is_none().await);
     /// # }
     /// ```
@@ -64,7 +64,7 @@ where
     /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = OptionHandle::new(Some(42));
+    /// let mut handle = OptionHandle::new(Some(42));
     /// assert_eq!(handle.take().await, Some(42));
     /// assert!(handle.is_none().await);
     /// # }
@@ -81,7 +81,7 @@ where
     /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = OptionHandle::new(Some(1));
+    /// let mut handle = OptionHandle::new(Some(1));
     /// assert_eq!(handle.replace(2).await, Some(1));
     /// assert_eq!(handle.get().await, Some(2));
     /// # }
@@ -98,10 +98,10 @@ where
     /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = OptionHandle::new(Some(10));
+    /// let mut handle = OptionHandle::new(Some(10));
     /// assert_eq!(handle.unwrap_or(0).await, 10);
     ///
-    /// let handle = OptionHandle::new(Option::<i32>::None);
+    /// let mut handle = OptionHandle::new(Option::<i32>::None);
     /// assert_eq!(handle.unwrap_or(0).await, 0);
     /// # }
     /// ```
@@ -117,7 +117,7 @@ where
     /// # use actify::OptionHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = OptionHandle::new(Option::<i32>::None);
+    /// let mut handle = OptionHandle::new(Option::<i32>::None);
     /// assert_eq!(handle.unwrap_or_default().await, 0);
     /// # }
     /// ```
@@ -135,7 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_the_defaults_apply_only_when_none() {
-        let handle: OptionHandle<i32> = OptionHandle::new(None);
+        let mut handle: OptionHandle<i32> = OptionHandle::new(None);
 
         assert_eq!(handle.unwrap_or(9).await, 9);
         assert_eq!(handle.unwrap_or_default().await, 0);
@@ -144,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_take_when_none() {
-        let handle = OptionHandle::new(Option::<i32>::None);
+        let mut handle = OptionHandle::new(Option::<i32>::None);
 
         assert_eq!(handle.take().await, None);
         assert!(handle.is_none().await);

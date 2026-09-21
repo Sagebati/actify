@@ -30,8 +30,10 @@ pub enum Next<M> {
 
 /// The sending half of a blocking actor's job channel, as a handle holds it.
 ///
-/// Sending takes `&self` because a handle is shared and cloned freely, which is
-/// how every blocking channel's sender already works.
+/// Sending takes `&self`, unlike the async backend's, because a blocking
+/// channel's sender genuinely sends that way and parks the calling thread
+/// rather than a waker. There is nothing to clone and nothing to serialise, so
+/// a blocking handle stays shareable.
 pub trait JobSender<M>: Clone + Send + Sync + 'static {
     /// Sends one job, waiting only if the channel applies backpressure.
     ///

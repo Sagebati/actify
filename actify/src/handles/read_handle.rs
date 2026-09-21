@@ -8,7 +8,7 @@ use super::handle::{Handle, ToView};
 /// Obtained via [`Handle::read_handle`]. Supports [`ReadHandle::get`].
 pub struct ReadHandle<T, V, M, S = crate::handles::DefaultSender<M>>(Handle<T, V, M, S>);
 
-impl<T, V, M, S> Clone for ReadHandle<T, V, M, S> {
+impl<T, V, M, S: Clone> Clone for ReadHandle<T, V, M, S> {
     fn clone(&self) -> Self {
         ReadHandle(self.0.clone())
     }
@@ -51,8 +51,8 @@ where
     /// # impl Counter {}
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = CounterHandle::new(Counter(1));
-    /// let read_handle = handle.read_handle();
+    /// let mut handle = CounterHandle::new(Counter(1));
+    /// let mut read_handle = handle.read_handle();
     /// let result = read_handle.get().await;
     /// assert_eq!(result, Counter(1));
     /// # }
@@ -63,7 +63,7 @@ where
     /// Panics if the actor has stopped, either because one of its methods
     /// panicked or because its runtime shut down. See [Actor lifetime and
     /// panics](crate#actor-lifetime-and-panics).
-    pub async fn get(&self) -> V {
+    pub async fn get(&mut self) -> V {
         self.0.get().await
     }
 }
@@ -101,8 +101,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_handle() {
-        let handle = CounterHandle::new(Counter(1));
-        let read_handle = handle.read_handle();
+        let mut handle = CounterHandle::new(Counter(1));
+        let mut read_handle = handle.read_handle();
         assert_eq!(read_handle.get().await.0, 1);
 
         handle.set(Counter(2)).await;

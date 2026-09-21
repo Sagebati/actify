@@ -72,7 +72,7 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
         .unwrap();
 
     runtime.block_on(async {
-        let handle = CounterHandle::new(Counter(0));
+        let mut handle = CounterHandle::new(Counter(0));
 
         // Anything paid once - the channel's first node, a waker's first
         // registration - is paid before any window opens.
@@ -120,11 +120,29 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
         );
 
         // A read handle is the same path.
-        let reader = handle.read_handle();
+        let mut reader = handle.read_handle();
         assert_allocations(
             measure_async(reader.get()).await,
             PER_CALL,
             "ReadHandle::get",
+        );
+
+        // A bounded channel costs the same two. It used to cost three: every
+        // send cloned the sender, and cloning a bounded `futures_channel`
+        // sender allocates an `Arc<Mutex<SenderTask>>` for the new sender's
+        // waker slot. A handle sends through its own sender now, so there is
+        // no clone and no third allocation.
+        let (mut bounded, actor) = CounterHandle::builder(Counter(0))
+            .channel(futures_channel::mpsc::channel(64))
+            .build();
+        tokio::spawn(actor);
+        for _ in 0..50 {
+            bounded.add(1).await;
+        }
+        assert_allocations(
+            measure_async(bounded.add(1)).await,
+            PER_CALL,
+            "add over a bounded channel",
         );
 
         // Handles share one channel through an `Arc`, so making another costs

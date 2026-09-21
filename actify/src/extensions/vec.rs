@@ -70,7 +70,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2]);
+    /// let mut handle = VecHandle::new(vec![1, 2]);
     /// handle.push(100).await;
     /// assert_eq!(handle.get().await, vec![1, 2, 100]);
     /// # }
@@ -87,7 +87,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(Vec::<i32>::new());
+    /// let mut handle = VecHandle::new(Vec::<i32>::new());
     /// assert!(handle.is_empty().await);
     /// # }
     /// ```
@@ -109,7 +109,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2]);
+    /// let mut handle = VecHandle::new(vec![1, 2]);
     /// let res = handle.drain(..).await;
     /// assert_eq!(res, vec![1, 2]);
     /// assert_eq!(handle.get().await, Vec::<i32>::new());
@@ -127,7 +127,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert_eq!(handle.len().await, 3);
     /// # }
     /// ```
@@ -143,7 +143,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert_eq!(handle.pop().await, Some(3));
     /// assert_eq!(handle.get().await, vec![1, 2]);
     /// # }
@@ -160,7 +160,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// handle.clear().await;
     /// assert!(handle.is_empty().await);
     /// # }
@@ -181,7 +181,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert_eq!(handle.remove(1).await, 2);
     /// assert_eq!(handle.get().await, vec![1, 3]);
     /// # }
@@ -203,7 +203,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3, 4]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3, 4]);
     /// assert_eq!(handle.swap_remove(1).await, 2);
     /// assert_eq!(handle.get().await, vec![1, 4, 3]);
     /// # }
@@ -224,7 +224,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 3]);
     /// handle.insert(1, 2).await;
     /// assert_eq!(handle.get().await, vec![1, 2, 3]);
     /// # }
@@ -241,7 +241,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
     /// handle.truncate(2).await;
     /// assert_eq!(handle.get().await, vec![1, 2]);
     /// # }
@@ -258,7 +258,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// handle.reverse().await;
     /// assert_eq!(handle.get().await, vec![3, 2, 1]);
     /// # }
@@ -281,7 +281,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
     /// let tail = handle.split_off(3).await;
     /// assert_eq!(tail, vec![4, 5]);
     /// assert_eq!(handle.get().await, vec![1, 2, 3]);
@@ -300,7 +300,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![10, 20, 30]);
+    /// let mut handle = VecHandle::new(vec![10, 20, 30]);
     /// assert_eq!(handle.get_index(1).await, Some(20));
     /// assert_eq!(handle.get_index(5).await, None);
     /// # }
@@ -317,7 +317,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![10, 20, 30]);
+    /// let mut handle = VecHandle::new(vec![10, 20, 30]);
     /// assert_eq!(handle.first().await, Some(10));
     /// # }
     /// ```
@@ -333,7 +333,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![10, 20, 30]);
+    /// let mut handle = VecHandle::new(vec![10, 20, 30]);
     /// assert_eq!(handle.last().await, Some(30));
     /// # }
     /// ```
@@ -349,7 +349,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert!(handle.contains(2).await);
     /// assert!(!handle.contains(5).await);
     /// # }
@@ -369,7 +369,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2]);
+    /// let mut handle = VecHandle::new(vec![1, 2]);
     /// handle.extend(vec![3, 4]).await;
     /// assert_eq!(handle.get().await, vec![1, 2, 3, 4]);
     /// # }
@@ -386,7 +386,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 1, 2, 3, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 1, 2, 3, 3]);
     /// handle.dedup().await;
     /// assert_eq!(handle.get().await, vec![1, 2, 3]);
     /// # }
@@ -406,7 +406,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![3, 1, 2]);
+    /// let mut handle = VecHandle::new(vec![3, 1, 2]);
     /// handle.sort().await;
     /// assert_eq!(handle.get().await, vec![1, 2, 3]);
     /// # }
@@ -430,7 +430,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// handle.swap(0, 2).await;
     /// assert_eq!(handle.get().await, vec![3, 2, 1]);
     /// # }
@@ -448,7 +448,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2]);
+    /// let mut handle = VecHandle::new(vec![1, 2]);
     /// handle.resize(4, 9).await;
     /// assert_eq!(handle.get().await, vec![1, 2, 9, 9]);
     /// handle.resize(1, 0).await;
@@ -466,7 +466,7 @@ impl<T, V, S> VecHandle<T, V, S>
 where
     T: Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: actify::JobSender<VecCall<T, V>>,
+    S: actify::JobSender<VecCall<T, V>> + Clone,
     Vec<T>: actify::ToView<V> + Send + Sync + 'static,
 {
     /// Removes the range from the vector and returns what it held.
@@ -477,7 +477,7 @@ where
     /// # use actify::VecHandle;
     /// # #[tokio::main]
     /// # async fn main() {
-    /// let handle = VecHandle::new(vec![1, 2, 3]);
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert_eq!(handle.drain(1..).await, vec![2, 3]);
     /// assert_eq!(handle.get().await, vec![1]);
     /// # }
@@ -486,7 +486,7 @@ where
     /// # Panics
     ///
     /// Panics if the actor has stopped.
-    pub async fn drain<R>(&self, range: R) -> Vec<T>
+    pub async fn drain<R>(&mut self, range: R) -> Vec<T>
     where
         R: RangeBounds<usize>,
     {
@@ -503,19 +503,19 @@ mod tests {
     /// leave the actor.
     #[tokio::test]
     async fn test_reads_return_owned_values() {
-        let handle = VecHandle::new(vec![1, 2, 3]);
+        let mut handle = VecHandle::new(vec![1, 2, 3]);
 
         assert_eq!(handle.get_index(9).await, None);
         assert!(!handle.contains(9).await);
 
-        let empty: VecHandle<i32> = VecHandle::new(Vec::new());
+        let mut empty: VecHandle<i32> = VecHandle::new(Vec::new());
         assert_eq!(empty.first().await, None);
         assert_eq!(empty.last().await, None);
     }
 
     #[tokio::test]
     async fn test_removals_return_what_they_removed() {
-        let handle = VecHandle::new(vec![1, 2, 3, 4]);
+        let mut handle = VecHandle::new(vec![1, 2, 3, 4]);
 
         assert_eq!(handle.pop().await, Some(4));
         assert_eq!(handle.get().await, vec![1, 2, 3]);
@@ -538,7 +538,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_orders_and_dedup_collapses_neighbours() {
-        let handle = VecHandle::new(vec![3, 1, 2, 2]);
+        let mut handle = VecHandle::new(vec![3, 1, 2, 2]);
 
         handle.sort().await;
         assert_eq!(handle.get().await, vec![1, 2, 2, 3]);
@@ -549,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_extend_and_truncate() {
-        let handle = VecHandle::new(vec![1, 2]);
+        let mut handle = VecHandle::new(vec![1, 2]);
 
         handle.insert(1, 9).await;
         assert_eq!(handle.get().await, vec![1, 9, 2]);
@@ -563,7 +563,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_swap_and_resize_change_order_and_length() {
-        let handle = VecHandle::new(vec![1, 2, 3]);
+        let mut handle = VecHandle::new(vec![1, 2, 3]);
 
         handle.swap(0, 2).await;
         assert_eq!(handle.get().await, vec![3, 2, 1]);

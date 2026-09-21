@@ -30,7 +30,7 @@ fn main() {
     // default is unbounded; either half can come from any channel crate.
     let channel = futures_channel::mpsc::channel(32);
 
-    let (handle, actor) = GreeterHandle::builder(Greeter {
+    let (mut handle, actor) = GreeterHandle::builder(Greeter {
         greeting: "hi".to_string(),
     })
     .channel(channel)

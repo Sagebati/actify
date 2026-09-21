@@ -59,7 +59,7 @@ impl Greeter {
 async fn main() {
     // The handle is initialized with the Greeter struct, and `actor` is the
     // future that serves it. Spawn it on whatever executor you use.
-    let (handle, actor) = GreeterHandle::builder(Greeter {}).build();
+    let (mut handle, actor) = GreeterHandle::builder(Greeter {}).build();
     tokio::spawn(actor);
 
     // The say_hi method is made available on its handle through the actify! macro
@@ -83,7 +83,7 @@ and the crate behind it are yours to pick. Anything that is a `Sink` and a
 ```rust,ignore
 let (tx, rx) = flume::unbounded();
 
-let (handle, actor) = GreeterHandle::builder(Greeter {})
+let (mut handle, actor) = GreeterHandle::builder(Greeter {})
     .channel((tx.into_sink(), rx.into_stream()))
     .build();
 
@@ -92,7 +92,15 @@ tokio::spawn(actor);
 
 Without a channel the default is an unbounded `futures-channel` queue, so
 queueing a call never waits and the only thing a call awaits is its reply. A
-bounded channel is how backpressure is asked for instead.
+bounded channel is how backpressure is asked for instead: a caller waits for a
+slot rather than queueing without limit. How much it holds is the channel's own
+rule — `futures-channel` holds `buffer + one slot per sender` — and a handle is
+a sender.
+
+A handle sends through its own sending half, by `&mut`, so one handle carries
+one call at a time; clone it to call from two places at once. An owned handle
+gives `&mut` for free, so the usual "clone into each task" shape is unaffected;
+a handle kept in a struct needs either a `&mut self` method or a `.clone()`.
 
 See `examples/spawn_it_yourself.rs` for an actor served without Tokio anywhere
 in the graph.
@@ -117,7 +125,7 @@ impl Counter {
     }
 }
 
-let handle = CounterHandle::new(Counter(0));
+let mut handle = CounterHandle::new(Counter(0));
 assert_eq!(handle.add(2), 2);
 assert_eq!(handle.get(), Counter(2));
 ```

@@ -19,7 +19,7 @@
 //!     }
 //! }
 //!
-//! let handle = CounterHandle::new(Counter(0));
+//! let mut handle = CounterHandle::new(Counter(0));
 //! assert_eq!(handle.add(2), 2);
 //! assert_eq!(handle.get(), Counter(2));
 //! ```
@@ -47,7 +47,7 @@
 //! # struct Counter(i32);
 //! # #[actify(blocking)]
 //! # impl Counter {}
-//! let (handle, actor) = CounterHandle::builder(Counter(0)).wait(Wait::Spin).build();
+//! let (mut handle, actor) = CounterHandle::builder(Counter(0)).wait(Wait::Spin).build();
 //! let running = std::thread::spawn(actor);
 //!
 //! assert_eq!(handle.get(), Counter(0));

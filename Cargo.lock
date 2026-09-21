@@ -31,6 +31,7 @@ version = "0.1.0"
 dependencies = [
  "actify",
  "flume",
+ "futures-channel",
  "futures-executor",
  "stats_alloc",
  "tokio",

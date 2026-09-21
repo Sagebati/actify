@@ -18,6 +18,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 # Its counters are process-wide, which is the requirement: a blocking actor
 # runs on its own thread, and a thread-local counter would not see it.
 stats_alloc = "0.1.10"
+futures-channel = "0.3"
 trybuild.workspace = true
 # trybuild builds the compile-fail cases in a generated crate that takes its
 # tokio features from this section, not from [dependencies]. `macros` is what
