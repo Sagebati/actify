@@ -3,10 +3,10 @@
 version = 4
 
 [[package]]
-name = "actify"
+name = "actum"
 version = "0.9.0"
 dependencies = [
- "actify-macros",
+ "actum-macros",
  "futures-channel",
  "futures-core",
  "futures-executor",
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "actify-macros"
+name = "actum-macros"
 version = "0.6.0"
 dependencies = [
  "proc-macro2",
@@ -26,10 +26,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "actify-test"
+name = "actum-test"
 version = "0.1.0"
 dependencies = [
- "actify",
+ "actum",
  "flume",
  "futures-channel",
  "futures-executor",

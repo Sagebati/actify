@@ -2,9 +2,9 @@
 
 resolver = "3"
 members = [
-    "actify",
-    "actify-macros",
-    "actify-test",
+    "actum",
+    "actum-macros",
+    "actum-test",
 ]
 
 [workspace.package]
@@ -14,9 +14,9 @@ license = "MIT"
 repository = "https://github.com/Sagebati/actify"
 
 [workspace.dependencies]
-# actify requires the exact macro version it was built against: generated code
-# reaches into actify::__private, which carries no stability promise.
-actify-macros = { path = "actify-macros", version = "=0.6.0" }
+# actum requires the exact macro version it was built against: generated code
+# reaches into actum::__private, which carries no stability promise.
+actum-macros = { path = "actum-macros", version = "=0.6.0" }
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full"] }

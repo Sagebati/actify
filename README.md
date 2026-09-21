@@ -1,10 +1,10 @@
-# Actify
+# Actum
 
 A hard fork of [actify](https://github.com/AvalorAI/actify), taken at 0.9.0. Not published to crates.io, and not tracking upstream. The API changes between commits.
 
-Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) for any struct. Just add `#[actify]` to an `impl` block and call your methods through a clonable handle of the actor's own.
+Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actum gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) for any struct. Just add `#[actum]` to an `impl` block and call your methods through a clonable handle of the actor's own.
 
-Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies. A call travels to it as a variant of a generated message enum, carrying its arguments and the caller's reply channel, so nothing on the way is boxed. With `#[actify(blocking)]` there is no runtime at all: the actor is a loop on a `std::thread` and the handle's methods are ordinary blocking calls.
+Actum is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies. A call travels to it as a variant of a generated message enum, carrying its arguments and the caller's reply channel, so nothing on the way is boxed. With `#[actum(blocking)]` there is no runtime at all: the actor is a loop on a `std::thread` and the handle's methods are ordinary blocking calls.
 
 [![License][mit-badge]][mit-url]
 
@@ -14,7 +14,7 @@ Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever 
 ## Installation
 
 ```sh
-cargo add actify
+cargo add actum
 ```
 
 ## Benefits
@@ -26,22 +26,22 @@ By generating the boilerplate code for you, a few key benefits are provided:
 - [Atomic](https://www.codingem.com/atomic-meaning-in-programming/) access and mutation of underlying data through clonable handles.
 - Typed arguments and return values on the methods from your actor, exposed through each handle.
 - No need to manually define message enums: the macro writes one, and a call is a variant of it.
-- Methods that cannot be actified can stay in the impl block with `#[actify::skip]`.
+- Methods that cannot be actified can stay in the impl block with `#[actum::skip]`.
 - Generic type parameters supported on the actor type.
 - Ready-made handles for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
-- A blocking backend, `#[actify(blocking)]`, for code with no executor to spare.
+- A blocking backend, `#[actum(blocking)]`, for code with no executor to spare.
 
 ## Example
 
 Consider the following example, in which you want to turn your custom Greeter into an actor:
 
 ```rust
-use actify::actify;
+use actum::actum;
 
 #[derive(Clone, std::fmt::Debug)]
 struct Greeter {}
 
-#[actify]
+#[actum]
 impl Greeter {
     fn say_hi(&self, name: String) -> String {
         format!("hi {}", name)
@@ -55,7 +55,7 @@ async fn main() {
     let (mut handle, actor) = GreeterHandle::builder(Greeter {}).build();
     tokio::spawn(actor);
 
-    // The say_hi method is made available on its handle through the actify! macro
+    // The say_hi method is made available on its handle through the actum! macro
     let greeting = handle.say_hi("Alfred".to_string()).await;
 
     // The method is executed remotely on the initialized Greeter and returned through the handle
@@ -100,17 +100,17 @@ in the graph.
 
 ## No runtime at all
 
-`#[actify(blocking)]` generates the same message enum, handle and builder with
+`#[actum(blocking)]` generates the same message enum, handle and builder with
 `async` taken out of all three. The actor's loop is a plain `fn` that a
 `std::thread` runs, and the handle's methods block until it answers:
 
 ```rust
-use actify::actify;
+use actum::actum;
 
 #[derive(Clone, std::fmt::Debug, PartialEq)]
 struct Counter(i32);
 
-#[actify(blocking)]
+#[actum(blocking)]
 impl Counter {
     fn add(&mut self, value: i32) -> i32 {
         self.0 += value;

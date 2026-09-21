@@ -1,8 +1,0 @@
-error[E0599]: no method named `hidden` found for struct `MyActorHandle<__ActifyS>` in the current scope
-  --> tests/compile_fail/skipped_method_not_on_handle.rs:27:20
-   |
-10 | #[actify]
-   | --------- method `hidden` not found for this struct
-...
-27 |     let _ = handle.hidden().await;
-   |                    ^^^^^^ method not found in `MyActorHandle`

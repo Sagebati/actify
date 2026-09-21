@@ -12,7 +12,7 @@ Forked from actify 0.9.0. What is different, and why:
 
 ### Changed
 
-- A call travels to its actor as data. `#[actify]` generates a message enum
+- A call travels to its actor as data. `#[actum]` generates a message enum
   with one variant per method, carrying that call's arguments and the
   caller's reply channel. Nothing on the way to the actor is boxed and
   nothing is downcast: a call costs the reply channel and the queue slot,
@@ -21,7 +21,7 @@ Forked from actify 0.9.0. What is different, and why:
 - The handle, the builder and the actor's loop are generated for each actor.
   There is no generic handle, no handle trait and no dispatch trait: the loop
   is a plain `match` over the actor's own enum, so a call reaches its method
-  directly. `#[actify]` is the only way to make an actor.
+  directly. `#[actum]` is the only way to make an actor.
 
 - A handle is exactly the methods its actor declares. There is no `get`, no
   `set` and no read handle, and an actor type needs no `Clone` or `Debug`.
@@ -42,7 +42,7 @@ Forked from actify 0.9.0. What is different, and why:
 
 ### Added
 
-- A blocking backend, `#[actify(blocking)]`. The actor runs on a
+- A blocking backend, `#[actum(blocking)]`. The actor runs on a
   `std::thread` and the handle's methods are ordinary synchronous calls.
   `Wait` chooses whether the actor and its callers park or busy-wait. The
   reply channel is the `oneshot` crate's; the job channel is `std::sync::mpsc`

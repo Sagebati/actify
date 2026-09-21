@@ -1,0 +1,593 @@
+use actum_macros::actum;
+use core::ops::{Bound, RangeBounds};
+
+/// An extension trait for `Vec<T>` actors, made available on the [`Handle`](crate::Handle)
+/// as [`VecHandle`](crate::VecHandle).
+trait ActorVec<T> {
+    /// Copies the vector out of the actor, as `[T]::to_vec` would.
+    fn to_vec(&self) -> Vec<T>;
+
+    fn push(&mut self, value: T);
+
+    fn is_empty(&self) -> bool;
+
+    /// Takes the range as a pair of bounds, which is what a call can carry.
+    /// The handle's own `drain` takes any range and lowers it to this.
+    #[doc(hidden)]
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T>;
+
+    fn len(&self) -> usize;
+
+    fn pop(&mut self) -> Option<T>;
+
+    fn clear(&mut self);
+
+    fn remove(&mut self, index: usize) -> T;
+
+    fn swap_remove(&mut self, index: usize) -> T;
+
+    fn insert(&mut self, index: usize, element: T);
+
+    fn truncate(&mut self, len: usize);
+
+    fn reverse(&mut self);
+
+    fn split_off(&mut self, at: usize) -> Vec<T>;
+
+    fn get_index(&self, index: usize) -> Option<T>;
+
+    fn first(&self) -> Option<T>;
+
+    fn last(&self) -> Option<T>;
+
+    fn contains(&self, value: T) -> bool
+    where
+        T: PartialEq;
+
+    fn extend(&mut self, items: Vec<T>);
+
+    fn dedup(&mut self)
+    where
+        T: PartialEq;
+
+    fn sort(&mut self)
+    where
+        T: Ord;
+
+    fn swap(&mut self, a: usize, b: usize);
+
+    fn resize(&mut self, new_len: usize, value: T);
+}
+
+/// Methods on [`VecHandle`](crate::VecHandle), for an actor holding a `Vec<T>>`, exposed as [`VecHandle`](crate::VecHandle).
+#[actum]
+impl<T> ActorVec<T> for Vec<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    /// Copies the vector out of the actor, as `[T]::to_vec` would.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
+    /// # }
+    /// ```
+    fn to_vec(&self) -> Vec<T> {
+        self.clone()
+    }
+
+    /// Appends an element to the back of a collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2]);
+    /// handle.push(100).await;
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 100]);
+    /// # }
+    /// ```
+    fn push(&mut self, value: T) {
+        self.push(value)
+    }
+
+    /// Returns `true` if the vector contains no elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(Vec::<i32>::new());
+    /// assert!(handle.is_empty().await);
+    /// # }
+    /// ```
+    fn is_empty(&self) -> bool {
+        self.is_empty()
+    }
+
+    /// Removes the specified range from the vector and returns the removed
+    /// items as a new `Vec`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the start of the range is greater than the end, or if the end
+    /// is greater than the length of the vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2]);
+    /// let res = handle.drain(..).await;
+    /// assert_eq!(res, vec![1, 2]);
+    /// assert_eq!(handle.to_vec().await, Vec::<i32>::new());
+    /// # }
+    /// ```
+    fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T> {
+        self.drain(range).collect()
+    }
+
+    /// Returns the number of elements in the vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// assert_eq!(handle.len().await, 3);
+    /// # }
+    /// ```
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    /// Removes the last element from a vector and returns it, or `None` if it is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// assert_eq!(handle.pop().await, Some(3));
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
+    /// # }
+    /// ```
+    fn pop(&mut self) -> Option<T> {
+        self.pop()
+    }
+
+    /// Clears the vector, removing all values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// handle.clear().await;
+    /// assert!(handle.is_empty().await);
+    /// # }
+    /// ```
+    fn clear(&mut self) {
+        self.clear()
+    }
+
+    /// Removes and returns the element at position `index`, shifting all elements after it to the left.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// assert_eq!(handle.remove(1).await, 2);
+    /// assert_eq!(handle.to_vec().await, vec![1, 3]);
+    /// # }
+    /// ```
+    fn remove(&mut self, index: usize) -> T {
+        self.remove(index)
+    }
+
+    /// Removes an element from the vector and returns it.
+    /// The removed element is replaced by the last element of the vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3, 4]);
+    /// assert_eq!(handle.swap_remove(1).await, 2);
+    /// assert_eq!(handle.to_vec().await, vec![1, 4, 3]);
+    /// # }
+    /// ```
+    fn swap_remove(&mut self, index: usize) -> T {
+        self.swap_remove(index)
+    }
+
+    /// Inserts an element at position `index`, shifting all elements after it to the right.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index > len`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 3]);
+    /// handle.insert(1, 2).await;
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
+    /// # }
+    /// ```
+    fn insert(&mut self, index: usize, element: T) {
+        self.insert(index, element)
+    }
+
+    /// Shortens the vector, keeping the first `len` elements and dropping the rest.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
+    /// handle.truncate(2).await;
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
+    /// # }
+    /// ```
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+
+    /// Reverses the order of elements in the vector, in place.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// handle.reverse().await;
+    /// assert_eq!(handle.to_vec().await, vec![3, 2, 1]);
+    /// # }
+    /// ```
+    fn reverse(&mut self) {
+        self.as_mut_slice().reverse()
+    }
+
+    /// Splits the vector into two at the given index.
+    /// Returns a newly allocated vector containing the elements in the range `[at, len)`.
+    /// After the call, the original vector will contain elements `[0, at)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > len`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
+    /// let tail = handle.split_off(3).await;
+    /// assert_eq!(tail, vec![4, 5]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
+    /// # }
+    /// ```
+    fn split_off(&mut self, at: usize) -> Vec<T> {
+        self.split_off(at)
+    }
+
+    /// Returns a clone of the element at the given index, or `None` if out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![10, 20, 30]);
+    /// assert_eq!(handle.get_index(1).await, Some(20));
+    /// assert_eq!(handle.get_index(5).await, None);
+    /// # }
+    /// ```
+    fn get_index(&self, index: usize) -> Option<T> {
+        self.get(index).cloned()
+    }
+
+    /// Returns a clone of the first element, or `None` if the vector is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![10, 20, 30]);
+    /// assert_eq!(handle.first().await, Some(10));
+    /// # }
+    /// ```
+    fn first(&self) -> Option<T> {
+        self.as_slice().first().cloned()
+    }
+
+    /// Returns a clone of the last element, or `None` if the vector is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![10, 20, 30]);
+    /// assert_eq!(handle.last().await, Some(30));
+    /// # }
+    /// ```
+    fn last(&self) -> Option<T> {
+        self.as_slice().last().cloned()
+    }
+
+    /// Returns `true` if the vector contains an element equal to the given value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// assert!(handle.contains(2).await);
+    /// assert!(!handle.contains(5).await);
+    /// # }
+    /// ```
+    fn contains(&self, value: T) -> bool
+    where
+        T: PartialEq,
+    {
+        self.as_slice().contains(&value)
+    }
+
+    /// Extends the vector with the contents of the given `Vec`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2]);
+    /// handle.extend(vec![3, 4]).await;
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3, 4]);
+    /// # }
+    /// ```
+    fn extend(&mut self, items: Vec<T>) {
+        <Self as Extend<T>>::extend(self, items)
+    }
+
+    /// Removes consecutive duplicate elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 1, 2, 3, 3]);
+    /// handle.dedup().await;
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
+    /// # }
+    /// ```
+    fn dedup(&mut self)
+    where
+        T: PartialEq,
+    {
+        self.dedup()
+    }
+
+    /// Sorts the vector in ascending order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![3, 1, 2]);
+    /// handle.sort().await;
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
+    /// # }
+    /// ```
+    fn sort(&mut self)
+    where
+        T: Ord,
+    {
+        self.as_mut_slice().sort()
+    }
+
+    /// Swaps the elements at the two given indices.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either index is out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// handle.swap(0, 2).await;
+    /// assert_eq!(handle.to_vec().await, vec![3, 2, 1]);
+    /// # }
+    /// ```
+    fn swap(&mut self, a: usize, b: usize) {
+        self.as_mut_slice().swap(a, b)
+    }
+
+    /// Resizes the vector to the given length, dropping the surplus or filling
+    /// the shortfall with clones of `value`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2]);
+    /// handle.resize(4, 9).await;
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 9, 9]);
+    /// handle.resize(1, 0).await;
+    /// assert_eq!(handle.to_vec().await, vec![1]);
+    /// # }
+    /// ```
+    fn resize(&mut self, new_len: usize, value: T) {
+        self.resize(new_len, value)
+    }
+}
+
+/// The range methods, written by hand so that a caller can still pass any
+/// range while the call itself carries a concrete pair of bounds.
+impl<T, S> VecHandle<T, S>
+where
+    T: Clone + Send + Sync + 'static,
+    S: actum::Sink<VecCall<T>> + Unpin + Clone,
+{
+    /// Removes the range from the vector and returns what it held.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actum::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2, 3]);
+    /// assert_eq!(handle.drain(1..).await, vec![2, 3]);
+    /// assert_eq!(handle.to_vec().await, vec![1]);
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the actor has stopped.
+    pub async fn drain<R>(&mut self, range: R) -> Vec<T>
+    where
+        R: RangeBounds<usize>,
+    {
+        self.drain_bounds((range.start_bound().cloned(), range.end_bound().cloned()))
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The methods that borrow in `std` clone here, since nothing borrowed can
+    /// leave the actor.
+    #[tokio::test]
+    async fn test_reads_return_owned_values() {
+        let mut handle = VecHandle::new(vec![1, 2, 3]);
+
+        assert_eq!(handle.get_index(9).await, None);
+        assert!(!handle.contains(9).await);
+
+        let mut empty: VecHandle<i32> = VecHandle::new(Vec::new());
+        assert_eq!(empty.first().await, None);
+        assert_eq!(empty.last().await, None);
+    }
+
+    #[tokio::test]
+    async fn test_removals_return_what_they_removed() {
+        let mut handle = VecHandle::new(vec![1, 2, 3, 4]);
+
+        assert_eq!(handle.pop().await, Some(4));
+        assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
+
+        assert_eq!(handle.remove(0).await, 1);
+        assert_eq!(handle.to_vec().await, vec![2, 3]);
+
+        handle.extend(vec![4, 5]).await;
+        // swap_remove moves the last element into the freed slot, which is what
+        // distinguishes it from remove
+        assert_eq!(handle.swap_remove(0).await, 2);
+        assert_eq!(handle.to_vec().await, vec![5, 3, 4]);
+
+        assert_eq!(handle.split_off(1).await, vec![3, 4]);
+        assert_eq!(handle.to_vec().await, vec![5]);
+        handle.clear().await;
+        assert!(handle.is_empty().await);
+        assert_eq!(handle.pop().await, None);
+    }
+
+    #[tokio::test]
+    async fn test_sort_orders_and_dedup_collapses_neighbours() {
+        let mut handle = VecHandle::new(vec![3, 1, 2, 2]);
+
+        handle.sort().await;
+        assert_eq!(handle.to_vec().await, vec![1, 2, 2, 3]);
+
+        handle.dedup().await;
+        assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_insert_extend_and_truncate() {
+        let mut handle = VecHandle::new(vec![1, 2]);
+
+        handle.insert(1, 9).await;
+        assert_eq!(handle.to_vec().await, vec![1, 9, 2]);
+
+        handle.extend(vec![3, 4]).await;
+        assert_eq!(handle.to_vec().await, vec![1, 9, 2, 3, 4]);
+
+        handle.truncate(2).await;
+        assert_eq!(handle.to_vec().await, vec![1, 9]);
+    }
+
+    #[tokio::test]
+    async fn test_swap_and_resize_change_order_and_length() {
+        let mut handle = VecHandle::new(vec![1, 2, 3]);
+
+        handle.swap(0, 2).await;
+        assert_eq!(handle.to_vec().await, vec![3, 2, 1]);
+
+        handle.resize(5, 9).await;
+        assert_eq!(handle.to_vec().await, vec![3, 2, 1, 9, 9]);
+
+        handle.resize(2, 0).await;
+        assert_eq!(handle.to_vec().await, vec![3, 2]);
+    }
+}

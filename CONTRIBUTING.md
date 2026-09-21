@@ -11,8 +11,8 @@ pushing:
 
 ```sh
 cargo test --workspace
-cargo test -p actify                                                  # default features
-cargo check -p actify --no-default-features                           # no runtime
+cargo test -p actum                                                  # default features
+cargo check -p actum --no-default-features                           # no runtime
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
@@ -20,7 +20,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 ```
 
 Dev-dependencies add tokio features that the library's own manifest does not
-declare, so `cargo check -p actify` is the only run that proves the declared
+declare, so `cargo check -p actum` is the only run that proves the declared
 features compile the library.
 
 Documentation is checked twice because feature-gated items cannot be linked from
@@ -70,7 +70,7 @@ explicitly, from `MSRV` and `TRYBUILD_TOOLCHAIN`.
 
 ## Compile-fail snapshots
 
-`actify-test/tests/compile_fail/` holds trybuild cases with committed `.stderr`
+`actum-test/tests/compile_fail/` holds trybuild cases with committed `.stderr`
 files. They are skipped unless `TRYBUILD_TESTS` is set, because they assert exact
 rustc diagnostics and only match the toolchain in `TRYBUILD_TOOLCHAIN`
 (`.github/workflows/ci.yml`).
@@ -78,8 +78,8 @@ rustc diagnostics and only match the toolchain in `TRYBUILD_TOOLCHAIN`
 Run them, and regenerate the snapshots after changing a macro diagnostic:
 
 ```sh
-TRYBUILD_TESTS=1 cargo test -p actify-test --test unsupported_arg_types
-TRYBUILD=overwrite TRYBUILD_TESTS=1 cargo test -p actify-test --test unsupported_arg_types
+TRYBUILD_TESTS=1 cargo test -p actum-test --test unsupported_arg_types
+TRYBUILD=overwrite TRYBUILD_TESTS=1 cargo test -p actum-test --test unsupported_arg_types
 ```
 
 Regenerate with the pinned toolchain, otherwise the committed output will not
@@ -94,7 +94,7 @@ one case too many.
 
 ## Allocation tests
 
-`actify-test/tests/allocations.rs` and `blocking_allocations.rs` count what a
+`actum-test/tests/allocations.rs` and `blocking_allocations.rs` count what a
 single call allocates and assert an exact number. Each lives in its own
 binary because the counter is process-wide, and each holds a single test for
 the same reason. A change that moves the count is a change to the crate's
