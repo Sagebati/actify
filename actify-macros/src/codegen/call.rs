@@ -255,14 +255,13 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
          Name it to give a channel its item type. Every variant carries its \
          call's arguments and the caller's reply channel, so nothing on the \
          way is boxed.",
-        quote! { #impl_type },
+        super::handle::display_type(info),
     );
     let call_name = call.to_string();
 
     quote! {
         #[doc = #enum_doc]
         #(#attrs)*
-        #[allow(non_camel_case_types)]
         pub enum #call<#(#declared,)* #view = #impl_type> {
             /// One of the calls every handle has, whatever its actor declares.
             __ActifyBuiltin(#root::Builtin<#impl_type, #view>),
@@ -294,8 +293,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         // is the macro's, not the caller's: the warning belongs at their call
         // site, which the handle's method carries it to.
         #[allow(deprecated)]
-        #[doc(hidden)]
-        pub #asyncness fn #run_ident #run_generics_impl(
+        #asyncness fn #run_ident #run_generics_impl(
             mut __actify_rx: __ActifyRx,
             mut __actify_actor: #root::__private::Actor<#impl_type>,
             #wait_param

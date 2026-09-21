@@ -139,8 +139,8 @@ what makes the channel agnostic in more than name. It is breaking throughout.
   exclusive still work, because only one of them ever exists.
 
 
-- An actor method cannot be named `new`, `builder`, `from_handle`, `get`, `set`
-  or `read_handle`.
+- An actor method cannot be named `new`, `builder`, `get`, `set` or
+  `read_handle`.
 
   Those are the methods every generated handle has, so one of the same name
   would be defined on the handle twice. The macro now says so and points at the

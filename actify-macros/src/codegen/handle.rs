@@ -27,3 +27,20 @@ pub(crate) fn quote_return_type(ty: &syn::Type) -> proc_macro2::TokenStream {
         _ => quote! { -> #ty },
     }
 }
+
+/// The impl type as a reader would write it, for generated docs.
+///
+/// `quote!` prints every token with a space around it, so `Fixed<N>` comes out
+/// as `Fixed < N >`. This closes the gaps a person would not leave.
+pub(crate) fn display_type(info: &ImplInfo) -> String {
+    let impl_type = &info.impl_type;
+    let spaced = quote! { #impl_type }.to_string();
+    spaced
+        .replace(" < ", "<")
+        .replace(" >", ">")
+        .replace("< ", "<")
+        .replace(" ,", ",")
+        .replace("& ", "&")
+        .replace(" ::", "::")
+        .replace(":: ", "::")
+}

@@ -90,7 +90,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
          Cloning it shares access to the same actor. A method sends its call as \
          a variant of the actor's own message enum, so nothing on the way to \
          the actor is boxed.",
-        quote! { #impl_type },
+        super::handle::display_type(info),
     );
     let debug_name = handle.to_string();
 
@@ -130,20 +130,11 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         }
 
         #(#attrs)*
-        impl #bare_generics #handle_ty {
-            /// Wraps a handle built through [`builder`](Self::builder).
-            pub fn from_handle(__actify_handle: #inner) -> Self {
-                #handle(__actify_handle)
-            }
-        }
-
-        #(#attrs)*
         impl #made_generics #made_ty #made_where {
             #constructors
         }
 
         #(#attrs)*
-        #[allow(unused_parens, private_interfaces, deprecated)]
         impl #full_generics #handle_ty #full_where {
             /// Returns the actor's current view.
             ///
@@ -281,7 +272,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
 
     let doc = format!(
         "Builds a handle to a `{}` actor, and the {} that serves it.",
-        quote! { #impl_type },
+        super::handle::display_type(info),
         match info.backend {
             crate::parse::Backend::Async => "future",
             crate::parse::Backend::Blocking => "closure",
@@ -415,7 +406,8 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
     // actor's `dispatch`, so the call carries a pointer to the method rather
     // than having `dispatch` name it. The closure captures nothing, which is
     // what lets it coerce to a plain function pointer.
-    let thunk = (carrier(method) == Carrier::Thunk).then(|| {
+    let thunked = carrier(method) == Carrier::Thunk;
+    let thunk = thunked.then(|| {
         let prefix = super::handle::build_call_prefix(info);
         quote! {
             __actify_thunk: |__actify_inner #(, #arg_names)*| {
@@ -424,8 +416,15 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
         }
     });
 
+    // The thunk names the method, and a deprecated one warns there even
+    // though the forwarder around it is deprecated too. A direct forwarder
+    // never names its method - only the loop does - so only a thunked one
+    // needs the allowance.
+    let allow_deprecated = thunked.then(|| quote! { #[allow(deprecated)] });
+
     quote! {
         #(#attrs)*
+        #allow_deprecated
         pub #asyncness fn #ident #method_generics(#receiver, #(#arg_names: #arg_types),*) #return_type
         #where_clause
         {
