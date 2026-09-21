@@ -23,10 +23,8 @@ fn compile_fail_tests() {
 
     let t = trybuild::TestCases::new();
 
-    // Argument type validation
-    t.compile_fail("tests/compile_fail/reference_arg.rs");
-    t.compile_fail("tests/compile_fail/raw_pointer_arg.rs");
-    t.compile_fail("tests/compile_fail/impl_trait_arg.rs");
+    // Argument types. The reference, raw-pointer and impl-Trait arms are
+    // asserted by multiple_errors below, which hits all three in one block.
     t.compile_fail("tests/compile_fail/unsupported_arg_type.rs");
 
     // Return type validation
@@ -37,9 +35,9 @@ fn compile_fail_tests() {
     t.compile_fail("tests/compile_fail/static_method.rs");
     t.compile_fail("tests/compile_fail/unsafe_method.rs");
 
-    // Method generics, which a variant of the message enum cannot hold
+    // Method generics, which a variant of the message enum cannot hold. One
+    // check covers type and const parameters alike, so one case does too.
     t.compile_fail("tests/compile_fail/method_generic.rs");
-    t.compile_fail("tests/compile_fail/method_const_generic.rs");
     t.compile_fail("tests/compile_fail/async_method_where_clause.rs");
     t.compile_fail("tests/compile_fail/async_method_in_blocking_block.rs");
     t.compile_fail("tests/compile_fail/by_value_self.rs");
