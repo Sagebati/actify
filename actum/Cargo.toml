@@ -21,6 +21,8 @@ actum-macros.workspace = true
 
 [dev-dependencies]
 futures-executor = "0.3"
+# For the worker-pool example: a channel whose receiver clones.
+flume = { version = "0.12", default-features = false }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [features]

@@ -98,6 +98,10 @@ a handle kept in a struct needs either a `&mut self` method or a `.clone()`.
 See `examples/spawn_it_yourself.rs` for an actor served without Tokio anywhere
 in the graph.
 
+See `examples/ten_producers.rs` for ten tasks feeding one actor through a
+bounded channel: each holds a clone of the handle, and the actor is the one
+consumer.
+
 ## No runtime at all
 
 `#[actum(blocking)]` generates the same message enum, handle and builder with
@@ -131,6 +135,10 @@ at all. An `async fn` in such a block is a compile error, since nothing is there
 to drive it.
 
 See `examples/no_runtime_at_all.rs` for a program that uses nothing else.
+
+See `examples/worker_pool.rs` for the other shape: four actors draining one
+queue, many producers and many consumers, over a channel brought from outside
+the crate.
 
 For full API documentation, run `cargo doc --open`.
 
