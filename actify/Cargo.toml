@@ -16,6 +16,7 @@ tokio = { workspace = true, features = ["rt"], optional = true }
 futures-core = { workspace = true, features = ["std"] }
 futures-sink = { workspace = true, features = ["std"] }
 futures-channel = { workspace = true, features = ["std", "sink"] }
+oneshot.workspace = true
 tracing = { workspace = true, features = ["std"] }
 actify-macros.workspace = true
 

@@ -1,48 +1,28 @@
 //! Counts the heap allocations one actor call costs.
 //!
+//! A call costs the reply channel and the queue slot carrying it, and nothing
+//! else. Both are one allocation: a `futures_channel::oneshot` for the reply,
+//! and one `Box<Node>` per message for the `futures_channel::mpsc` queue. So
+//! every case here is exactly two, and every case is measured on its own rather
+//! than averaged, because an average cannot tell two every call from three on
+//! half of them.
+//!
 //! This has its own binary on purpose: the counter is process-wide, so a test
 //! running beside it on another thread would be counted too. Keep this file to
 //! a single test.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+mod support;
+
+use std::alloc::System;
 
 use actify::actify;
-
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-static COUNTING: AtomicBool = AtomicBool::new(false);
-
-struct Counting;
-
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
+use support::{COUNTING, StatsAlloc, assert_allocations, measure, measure_async};
 
 #[global_allocator]
-static ALLOCATOR: Counting = Counting;
+static GLOBAL: &StatsAlloc<System> = COUNTING;
+
+/// What a call costs: the reply channel, and the queue slot carrying it.
+const PER_CALL: usize = 2;
 
 #[derive(Clone, Debug)]
 struct Counter(i32);
@@ -58,34 +38,31 @@ impl Counter {
         self.0 += value;
         self.0
     }
-}
 
-/// Runs `call` repeatedly and reports what each one allocated.
-async fn per_call<F, Fut>(runs: usize, mut call: F) -> f64
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = i32>,
-{
-    // Warm up, so that anything a channel allocates in batches is already paid
-    // for by the time the count starts.
-    for _ in 0..runs {
-        call().await;
+    /// Takes an owned `String` and hands it straight back, so the method body
+    /// allocates nothing and the only thing measured is the plumbing.
+    fn echo(&self, name: String) -> String {
+        name
     }
 
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-    COUNTING.store(true, Ordering::Relaxed);
-    for _ in 0..runs {
-        call().await;
+    /// Returns something big but `Copy`, so producing it costs nothing and any
+    /// allocation would be a box the plumbing put around it.
+    fn block(&self) -> [u8; 64] {
+        [self.0 as u8; 64]
     }
-    COUNTING.store(false, Ordering::Relaxed);
 
-    ALLOCATIONS.load(Ordering::Relaxed) as f64 / runs as f64
+    fn nothing(&self) {}
+
+    /// Carries a `where` clause of its own, so its call reaches it through a
+    /// function pointer in the message rather than by being named directly.
+    fn sorted(&self, values: Vec<i32>) -> Vec<i32>
+    where
+        i32: Ord,
+    {
+        values
+    }
 }
 
-/// A call costs the reply channel and the queue slot carrying it, and nothing
-/// else. The arguments and the result travel inside the message at their own
-/// types, so neither is boxed, and the actor runs the call without boxing a
-/// future for it either.
 #[test]
 fn a_call_allocates_only_the_reply_and_its_queue_slot() {
     // A current-thread runtime keeps the actor on this thread, so every
@@ -97,23 +74,62 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
     runtime.block_on(async {
         let handle = CounterHandle::new(Counter(0));
 
-        let builtin = per_call(200, || async { handle.get().await.0 }).await;
-        let generated = per_call(200, || handle.add(1)).await;
-        let generated_async = per_call(200, || handle.add_later(1)).await;
+        // Anything paid once - the channel's first node, a waker's first
+        // registration - is paid before any window opens.
+        for _ in 0..50 {
+            handle.add(1).await;
+            handle.get().await;
+        }
 
-        println!("get:       {builtin} allocations per call");
-        println!("add:       {generated} allocations per call");
-        println!("add_later: {generated_async} allocations per call");
+        // The built-in calls.
+        assert_allocations(measure_async(handle.get()).await, PER_CALL, "get");
+        assert_allocations(measure_async(handle.set(Counter(0))).await, PER_CALL, "set");
 
-        assert!(builtin <= 2.0, "get allocated {builtin} per call");
-        assert!(generated <= 2.0, "add allocated {generated} per call");
+        // A plain generated method.
+        assert_allocations(measure_async(handle.add(1)).await, PER_CALL, "add");
 
-        // An async method costs no more: the enum's `dispatch` is one
-        // `async fn`, so the body's future is part of it rather than boxed
-        // beside it.
-        assert!(
-            generated_async <= 2.0,
-            "add_later allocated {generated_async} per call"
+        // An async method costs no more: the generated loop is one `async fn`,
+        // so the method's future is part of its state machine rather than
+        // boxed beside it.
+        assert_allocations(
+            measure_async(handle.add_later(1)).await,
+            PER_CALL,
+            "add_later",
         );
+
+        // An owned argument is moved into the message variant. Built before
+        // the window, so a clone on the way would show up as a third.
+        let name = "Alfred".to_string();
+        assert_allocations(measure_async(handle.echo(name)).await, PER_CALL, "echo");
+
+        // The result travels inside the message at its own type. A box around
+        // it would show up as a third.
+        assert_allocations(measure_async(handle.block()).await, PER_CALL, "block");
+
+        // The reply channel is made whether or not there is anything to put in
+        // it, so a method returning nothing costs the same two, not one.
+        assert_allocations(measure_async(handle.nothing()).await, PER_CALL, "nothing");
+
+        // A `where` clause is carried by a function pointer in the variant,
+        // which is a word, not a boxed closure.
+        let values = vec![3, 1, 2];
+        assert_allocations(
+            measure_async(handle.sorted(values)).await,
+            PER_CALL,
+            "sorted",
+        );
+
+        // A read handle is the same path.
+        let reader = handle.read_handle();
+        assert_allocations(
+            measure_async(reader.get()).await,
+            PER_CALL,
+            "ReadHandle::get",
+        );
+
+        // Handles share one channel through an `Arc`, so making another costs
+        // a reference count and nothing on the heap.
+        assert_allocations(measure(|| handle.clone()), 0, "Handle::clone");
+        assert_allocations(measure(|| handle.read_handle()), 0, "read_handle");
     });
 }

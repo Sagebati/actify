@@ -38,6 +38,36 @@ what makes the channel agnostic in more than name. It is breaking throughout.
   `Actor::respond` is now generic over which reply channel it answers, which is
   what lets both backends share one `Actor`, one span and one exit guard.
 
+  The blocking reply channel is the [`oneshot`] crate, whose receiver both
+  blocks a thread and polls wait-free, which is what the two wait modes need.
+  It is a new dependency of actify, with no dependencies of its own, the same
+  1.85 MSRV, and only its `std` feature enabled - `async` is off, since a
+  blocking handle's methods never await. The async backend is unchanged and
+  still uses `futures_channel::oneshot`.
+
+  [`oneshot`]: https://crates.io/crates/oneshot
+
+### Fixed
+
+- The per-call allocation count is pinned exactly rather than bounded.
+
+  The allocation tests measured an average over 200 calls against an upper
+  bound, which could not tell two allocations on every call from three on half
+  of them and one on the rest, and would not have noticed the blocking
+  backend's measured 1.03 regressing to the asserted 2.0. Each call is now
+  measured on its own and asserted at an exact count, over nine call shapes
+  rather than three: the built-ins, a plain method, an async method, an owned
+  argument, a returned value, a method returning nothing, a method reaching its
+  target through a thunk, and a read handle - plus the two paths that must
+  allocate nothing at all, cloning a handle and taking a read handle from one.
+
+  The counting is [`stats_alloc`]'s rather than hand-rolled. Its counters are
+  process-wide, which is what these tests need: a blocking actor runs on its
+  own thread, and a thread-local counter would not see the method run or the
+  reply sent.
+
+  [`stats_alloc`]: https://crates.io/crates/stats_alloc
+
 ### Changed
 
 - A call travels to its actor as data, not as a boxed closure.

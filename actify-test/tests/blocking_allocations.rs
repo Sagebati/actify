@@ -1,49 +1,35 @@
 //! Counts the heap allocations one blocking actor call costs.
 //!
-//! This has its own binary on purpose: the counter is process-wide, so a test
-//! running beside it on another thread would be counted too. Keep this file to
-//! a single test.
+//! The reply channel is one allocation, as the async backend's is. The queue
+//! slot is the part that differs: a `sync_channel` allocates its buffer once at
+//! construction and nothing per message, so over one of those a call costs
+//! exactly one allocation - the reply, and nothing else. The default unbounded
+//! `std::sync::mpsc` allocates its queue in blocks of about thirty-two
+//! messages, so there the per-call cost is one with an occasional second.
+//!
+//! The counter is process-wide, not per-thread, so the actor's own thread is
+//! counted here too - which is the point, since that is where the method runs
+//! and where the reply is sent. It is also why this file has its own binary and
+//! holds a single test: anything running beside it would be counted as well.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+mod support;
+
+use std::alloc::System;
 
 use actify::actify;
 use actify::blocking::Wait;
-
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-static COUNTING: AtomicBool = AtomicBool::new(false);
-
-struct Counting;
-
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
-            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        }
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
+use support::{COUNTING, StatsAlloc, assert_allocations, assert_every_call, measure, measure_each};
 
 #[global_allocator]
-static ALLOCATOR: Counting = Counting;
+static GLOBAL: &StatsAlloc<System> = COUNTING;
+
+/// What a call costs over a channel that has already allocated its queue: the
+/// reply, and nothing else.
+const PER_CALL: usize = 1;
+
+/// How many slots the bounded channel gets. Large enough that a caller never
+/// waits on it, so what is measured is a call and not a queue being drained.
+const SLOTS: usize = 64;
 
 #[derive(Clone, Debug)]
 struct Counter(i32);
@@ -54,60 +40,117 @@ impl Counter {
         self.0 += value;
         self.0
     }
-}
 
-/// Runs `call` repeatedly and reports what each one allocated.
-fn per_call<F: FnMut() -> i32>(runs: usize, mut call: F) -> f64 {
-    // Warm up, so that anything a channel allocates in batches is already paid
-    // for by the time the count starts.
-    for _ in 0..runs {
-        call();
+    /// Takes an owned `String` and hands it straight back, so the method body
+    /// allocates nothing and the only thing measured is the plumbing.
+    fn echo(&self, name: String) -> String {
+        name
     }
 
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-    COUNTING.store(true, Ordering::Relaxed);
-    for _ in 0..runs {
-        call();
+    /// Returns something big but `Copy`, so producing it costs nothing and any
+    /// allocation would be a box the plumbing put around it.
+    fn block(&self) -> [u8; 64] {
+        [self.0 as u8; 64]
     }
-    COUNTING.store(false, Ordering::Relaxed);
 
-    ALLOCATIONS.load(Ordering::Relaxed) as f64 / runs as f64
+    fn nothing(&self) {}
+
+    /// Carries a `where` clause of its own, so its call reaches it through a
+    /// function pointer in the message rather than by being named directly.
+    fn sorted(&self, values: Vec<i32>) -> Vec<i32>
+    where
+        i32: Ord,
+    {
+        values
+    }
 }
 
-/// A blocking call costs the same as an async one: the reply channel and the
-/// queue slot carrying it, and nothing else. The arguments and the result
-/// travel inside the message at their own types, so neither is boxed, and the
-/// reply slot is one `Arc` exactly as a futures oneshot is.
-///
-/// The two wait modes are measured separately because they take different
-/// paths out of the same slot, and neither is allowed to allocate on the way.
-///
-/// The budget asserted here is the async backend's two, so that neither can
-/// regress past the other. The figure printed is lower, around one, because
-/// `std::sync::mpsc` allocates its queue in blocks rather than per message.
 #[test]
 fn a_call_allocates_only_the_reply_and_its_queue_slot() {
+    // Both wait modes take different paths out of the same channel, and
+    // neither may allocate on the way.
     for wait in [Wait::Park, Wait::Spin] {
-        // The actor is on its own thread, so its allocations are not counted
-        // here. That is the same shape as the async test, which pins the actor
-        // to the calling thread instead; either way what is measured is one
-        // caller's cost per call.
-        let (handle, actor) = CounterHandle::builder(Counter(0)).wait(wait).build();
+        let (handle, actor) = CounterHandle::builder(Counter(0))
+            .channel(std::sync::mpsc::sync_channel(SLOTS))
+            .wait(wait)
+            .build();
         let running = std::thread::spawn(actor);
 
-        let builtin = per_call(200, || handle.get().0);
-        let generated = per_call(200, || handle.add(1));
+        // Anything paid once - the channel's buffer, a thread's first park -
+        // is paid before any window opens.
+        for _ in 0..50 {
+            handle.add(1);
+            handle.get();
+        }
 
-        println!("{wait:?} get: {builtin} allocations per call");
-        println!("{wait:?} add: {generated} allocations per call");
+        let case = |name: &str| format!("{wait:?} {name}");
 
-        assert!(builtin <= 2.0, "{wait:?} get allocated {builtin} per call");
-        assert!(
-            generated <= 2.0,
-            "{wait:?} add allocated {generated} per call"
-        );
+        // The built-in calls.
+        assert_allocations(measure(|| handle.get()), PER_CALL, &case("get"));
+        assert_allocations(measure(|| handle.set(Counter(0))), PER_CALL, &case("set"));
 
+        // A plain generated method.
+        assert_allocations(measure(|| handle.add(1)), PER_CALL, &case("add"));
+
+        // An owned argument is moved into the message variant. Built before
+        // the window, so a clone on the way would show up as a second.
+        let name = "Alfred".to_string();
+        assert_allocations(measure(|| handle.echo(name)), PER_CALL, &case("echo"));
+
+        // The result travels inside the message at its own type.
+        assert_allocations(measure(|| handle.block()), PER_CALL, &case("block"));
+
+        // The reply channel is made whether or not there is anything to put in
+        // it, so a method returning nothing costs the same, not nothing.
+        assert_allocations(measure(|| handle.nothing()), PER_CALL, &case("nothing"));
+
+        // A `where` clause is carried by a function pointer in the variant,
+        // which is a word, not a boxed closure.
+        let values = vec![3, 1, 2];
+        assert_allocations(measure(|| handle.sorted(values)), PER_CALL, &case("sorted"));
+
+        // A read handle is the same path.
+        let reader = handle.read_handle();
+        assert_allocations(measure(|| reader.get()), PER_CALL, &case("ReadHandle::get"));
+
+        // Handles share one channel through an `Arc`, so making another costs
+        // a reference count and nothing on the heap.
+        assert_allocations(measure(|| handle.clone()), 0, &case("Handle::clone"));
+        assert_allocations(measure(|| handle.read_handle()), 0, &case("read_handle"));
+
+        // Not one call in isolation but every one of a run of them: over a
+        // channel that has already allocated its queue there is nothing left
+        // to amortise, so a single call costing more than the reply would show
+        // up here even if the one measured above happened to be cheap.
+        let counts = measure_each(200, || handle.add(1));
+        assert_every_call(&counts, PER_CALL, &case("add over a preallocated channel"));
+
+        drop(reader);
         drop(handle);
         running.join().unwrap();
     }
+
+    // The default channel allocates its queue in blocks rather than per
+    // message, so the per-call cost is the reply alone and the block shows up
+    // on the occasional call that fills one.
+    let (handle, actor) = CounterHandle::builder(Counter(0)).build();
+    let running = std::thread::spawn(actor);
+
+    for _ in 0..50 {
+        handle.add(1);
+    }
+    let counts = measure_each(200, || handle.add(1));
+
+    let min = *counts.iter().min().unwrap();
+    let max = *counts.iter().max().unwrap();
+    println!("default channel: min {min}, max {max} allocations per call");
+
+    assert_eq!(min, PER_CALL, "the cheapest call is the reply alone");
+    assert!(
+        max <= PER_CALL + 1,
+        "no call costs more than the reply and one queue block, saw {max}"
+    );
+
+    drop(handle);
+    running.join().unwrap();
 }
