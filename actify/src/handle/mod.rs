@@ -1,12 +1,20 @@
-use futures_channel::oneshot;
+//! The handle a caller holds to an async actor.
+
 use std::any::type_name;
 use std::fmt::{self, Debug};
+use std::future::poll_fn;
 use std::marker::PhantomData;
+use std::pin::Pin;
 
-use super::read_handle::ReadHandle;
-use crate::actor::reply;
-use crate::channel::JobSender;
-use crate::message::Builtin;
+use futures_channel::oneshot;
+use futures_sink::Sink;
+
+mod builder;
+
+pub use builder::builder;
+#[cfg(feature = "tokio")]
+pub use builder::spawn;
+pub use builder::{DefaultChannel, HandleBuilder};
 
 /// Panics because the actor is gone, whether it stopped or a method of it
 /// panicked. Which of the two it was is on the actor's own exit event, at
@@ -15,73 +23,26 @@ fn report_actor_gone<T>() -> ! {
     panic!("Actor of type {} is no longer running", type_name::<T>());
 }
 
-/// Defines the view an actor exposes: the type `V` that [`Handle::get`]
-/// returns.
-///
-/// A blanket implementation is provided for [`Clone`] types, whose view is
-/// themselves. Implement this trait to expose a different type `V` from your
-/// actor type `T`, which allows:
-///
-/// - Non-Clone types to be read
-/// - Clone types to expose a lightweight summary instead of the full value
-///
-/// # Examples
-///
-/// ```
-/// use actify::ToView;
-///
-/// struct HeavyState {
-///     data: Vec<u8>,
-///     summary: String,
-/// }
-///
-/// #[derive(Clone, Debug)]
-/// struct Summary(String);
-///
-/// impl ToView<Summary> for HeavyState {
-///     fn to_view(&self) -> Summary {
-///         Summary(self.summary.clone())
-///     }
-/// }
-/// ```
-pub trait ToView<V> {
-    /// Produces the view of the actor.
-    ///
-    /// Runs on the actor task, on every [`Handle::get`].
-    fn to_view(&self) -> V;
-}
-
-impl<T: Clone> ToView<T> for T {
-    fn to_view(&self) -> T {
-        self.clone()
-    }
-}
-
-/// The plumbing behind a generated handle: a shared sending half, and the
-/// calls every actor answers.
+/// The plumbing behind a generated handle: the sending half of the actor's job
+/// channel.
 ///
 /// `#[actify]` generates a handle of the actor's own that wraps this one, so a
-/// caller never names it. Cloning it shares access to the same actor across
-/// tasks.
-///
-/// The second type parameter `V` is the view the handle exposes: what
-/// [`Handle::get`] returns. By default `V = T`, so a read is a clone of the
-/// actor itself. To expose a different type, implement [`ToView<V>`] and name
-/// it on the generated handle, as in `MyTypeHandle::<Summary>::new(val)`.
-pub struct Handle<T, V, M, S = DefaultSender<M>> {
+/// caller never names it. Cloning it clones the sending half, which shares
+/// access to the same actor across tasks.
+pub struct Handle<T, M, S = DefaultSender<M>> {
     // Owned outright, not shared: a sending half sent through by `&mut` is one
     // a bounded channel can refuse, and the channel counts handles rather than
     // calls. The last handle to drop drops the last sending half with it, which
     // is what stops the actor. A `futures_channel` sender is a niche-optimised
-    // `Option<Arc<_>>`, so the handle is still one pointer wide.
+    // `Option<Arc<_>>`, so the handle is one pointer wide.
     sender: S,
-    actor: Marker<T, V, M>,
+    actor: Marker<T, M>,
 }
 
 /// Names the types a handle is for without holding one of them, and without
 /// borrowing their auto traits: a handle is `Send` and `Sync` on the strength
 /// of its channel alone.
-type Marker<T, V, M> = PhantomData<fn() -> (T, V, M)>;
+type Marker<T, M> = PhantomData<fn() -> (T, M)>;
 
 /// The channel a handle uses when the caller supplies none: an unbounded
 /// [`futures_channel`] queue, so a call never waits to be queued.
@@ -93,7 +54,7 @@ pub type DefaultReceiver<M> = futures_channel::mpsc::UnboundedReceiver<M>;
 /// Cloning a handle clones its sending half, which is the only clone actify
 /// makes. Every channel's sender is a cheap handle onto shared state, so it
 /// costs a reference count rather than a copy of the queue.
-impl<T, V, M, S: Clone> Clone for Handle<T, V, M, S> {
+impl<T, M, S: Clone> Clone for Handle<T, M, S> {
     fn clone(&self) -> Self {
         Handle {
             sender: self.sender.clone(),
@@ -102,84 +63,15 @@ impl<T, V, M, S: Clone> Clone for Handle<T, V, M, S> {
     }
 }
 
-impl<T, V, M, S> Debug for Handle<T, V, M, S> {
+impl<T, M, S> Debug for Handle<T, M, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let actor = type_name::<T>();
-        let view = type_name::<V>();
-        if actor == view {
-            write!(f, "Handle<{actor}>")
-        } else {
-            write!(f, "Handle<{actor}, {view}>")
-        }
+        write!(f, "Handle<{}>", type_name::<T>())
     }
 }
 
-impl<T, V, M, S> Handle<T, V, M, S>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    M: From<Builtin<T, V>> + Send + 'static,
-    S: JobSender<M>,
-{
-    /// Returns the actor's current view.
-    ///
-    /// For a `Clone` actor type without a [`ToView`] implementation of its own,
-    /// `V` is the actor type and this is a clone of the whole value. Otherwise
-    /// it is whatever [`ToView::to_view`] produces.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::actify;
-    /// # #[derive(Clone, Debug, PartialEq)]
-    /// # struct Counter(i32);
-    /// # #[actify]
-    /// # impl Counter {}
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let mut handle = CounterHandle::new(Counter(1));
-    /// assert_eq!(handle.get().await, Counter(1));
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn get(&mut self) -> V {
-        let (reply, get_result) = reply();
-        self.__call(Builtin::Get(reply).into(), get_result).await
-    }
-
-    /// Overwrites the inner value of the actor with the new value.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use actify::OptionHandle;
-    /// # #[tokio::main]
-    /// # async fn main() {
-    /// let mut handle = OptionHandle::new(None);
-    /// handle.set(Some(1)).await;
-    /// assert_eq!(handle.get().await, Some(1));
-    /// # }
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the actor has stopped, either because one of its methods
-    /// panicked or because its runtime shut down. See [Actor lifetime and
-    /// panics](crate#actor-lifetime-and-panics).
-    pub async fn set(&mut self, val: T) {
-        let (reply, get_result) = reply();
-        self.__call(Builtin::Set(val, reply).into(), get_result)
-            .await
-    }
-}
-
-impl<T, V, M, S> Handle<T, V, M, S> {
-    pub(super) fn from_sender(sender: S) -> Self {
+impl<T, M, S> Handle<T, M, S> {
+    /// Only the builder makes one, and it is a child of this module.
+    fn from_sender(sender: S) -> Self {
         Handle {
             sender,
             actor: PhantomData,
@@ -187,29 +79,14 @@ impl<T, V, M, S> Handle<T, V, M, S> {
     }
 }
 
-impl<T, V, M, S: Clone> Handle<T, V, M, S> {
-    /// Returns a [`ReadHandle`] that provides read-only access to this actor.
-    ///
-    /// It carries a sending half of its own, so it keeps the actor alive on its
-    /// own and can be read from without the handle it came from.
-    pub fn read_handle(&self) -> ReadHandle<T, V, M, S> {
-        ReadHandle::new(self.clone())
-    }
-}
-
-impl<T, V, M, S> Handle<T, V, M, S>
-where
-    T: 'static,
-    M: Send + 'static,
-    S: JobSender<M>,
-{
+impl<T, M, S: Sink<M> + Unpin> Handle<T, M, S> {
     /// Queues one call and waits for its reply.
     ///
     /// The reply channel is the caller's to make, so that it carries the
     /// method's own return type rather than something erased.
     #[doc(hidden)]
     pub async fn __call<R>(&mut self, message: M, get_result: oneshot::Receiver<R>) -> R {
-        if self.sender.send(message).await.is_ok() {
+        if send(&mut self.sender, message).await.is_ok() {
             if let Ok(res) = get_result.await {
                 return res;
             }
@@ -218,19 +95,37 @@ where
     }
 }
 
+/// Sends one job through the sink: ready, send, flush.
+///
+/// This is `SinkExt::send` without a dependency on `futures-util` for one
+/// method. The sink is the handle's own, sent through directly: nothing is
+/// cloned, which is what lets a bounded sink refuse. A sender it has already
+/// parked reports itself unready, where a fresh clone never would.
+async fn send<M, S: Sink<M> + Unpin>(sink: &mut S, job: M) -> Result<(), S::Error> {
+    poll_fn(|cx| Pin::new(&mut *sink).poll_ready(cx)).await?;
+    Pin::new(&mut *sink).start_send(job)?;
+    poll_fn(|cx| Pin::new(&mut *sink).poll_flush(cx)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// An actor with no methods of its own, so its handle carries the
-    /// built-in calls and nothing else. An empty `#[actify]` block is how an
-    /// actor asks for exactly that.
-    #[derive(Clone, Debug)]
+    #[derive(Debug)]
     struct Counter(i32);
 
     #[actify_macros::actify]
-    impl Counter {}
+    impl Counter {
+        fn add(&mut self, value: i32) -> i32 {
+            self.0 += value;
+            self.0
+        }
+
+        fn value(&self) -> i32 {
+            self.0
+        }
+    }
 
     /// A built handle serves calls only once its actor future is spawned, and
     /// every call panics until then, so the two halves are useless apart.
@@ -239,11 +134,11 @@ mod tests {
         let (handle, actor) = CounterHandle::builder(Counter(1)).build();
 
         let mut caller = handle.clone();
-        let call = tokio::spawn(async move { caller.get().await });
+        let call = tokio::spawn(async move { caller.value().await });
 
         tokio::spawn(actor);
 
-        assert_eq!(call.await.unwrap().0, 1);
+        assert_eq!(call.await.unwrap(), 1);
     }
 
     /// Dropping the actor future is the same failure as an actor that stopped:
@@ -253,16 +148,43 @@ mod tests {
         let (mut handle, actor) = CounterHandle::builder(Counter(1)).build();
         drop(actor);
 
-        let result = tokio::spawn(async move { handle.get().await }).await;
+        let result = tokio::spawn(async move { handle.value().await }).await;
 
         assert!(panic_message(result.unwrap_err()).contains("no longer running"));
     }
 
     /// A handle travels by value: it is held in structs and captured by
-    /// futures, so its size is paid on every copy.
+    /// futures, so its size is paid on every copy. It owns its sender, and a
+    /// `futures_channel` sender is a niche-optimised `Option<Arc<_>>`.
     #[test]
     fn test_handle_is_pointer_sized() {
         assert_eq!(size_of::<CounterHandle>(), size_of::<usize>());
+    }
+
+    /// An actor type needs neither `Clone` nor `Debug`: nothing reads it whole
+    /// and nothing prints it. Its handle is still both.
+    #[tokio::test]
+    async fn test_an_actor_needs_no_derives() {
+        struct Plain {
+            value: i32,
+        }
+
+        #[actify_macros::actify]
+        impl Plain {
+            fn value(&self) -> i32 {
+                self.value
+            }
+        }
+
+        let mut handle = PlainHandle::new(Plain { value: 42 });
+        assert_eq!(handle.value().await, 42);
+
+        let mut other = handle.clone();
+        assert_eq!(other.value().await, 42);
+        assert_eq!(
+            format!("{handle:?}"),
+            format!("PlainHandle<{}>", type_name::<Plain>())
+        );
     }
 
     /// A panicking actor method leaves the actor gone, which the next call
@@ -353,8 +275,7 @@ mod tests {
 
         let handle = actor_rt.block_on(async {
             let mut handle = CounterHandle::new(Counter(0));
-            handle.set(Counter(42)).await;
-            assert_eq!(handle.get().await.0, 42); // The actor served jobs normally
+            assert_eq!(handle.add(42).await, 42); // The actor served jobs normally
             handle
         });
 
@@ -367,7 +288,7 @@ mod tests {
 
         caller_rt.block_on(async {
             let mut orphaned = handle.clone();
-            let result = tokio::spawn(async move { orphaned.set(Counter(99)).await }).await;
+            let result = tokio::spawn(async move { orphaned.add(1).await }).await;
 
             let message = panic_message(result.unwrap_err());
             assert!(
@@ -375,38 +296,6 @@ mod tests {
                 "expected a stopped-actor message, got: {message}"
             );
         });
-    }
-
-    mod views {
-        use super::*;
-
-        fn big() -> BigStateHandle<usize> {
-            BigStateHandle::<usize>::new(BigState {
-                data: vec![1, 2, 3],
-                count: 7,
-            })
-        }
-
-        #[tokio::test]
-        async fn test_get_returns_the_view_not_the_state() {
-            assert_eq!(big().get().await, 7);
-        }
-
-        #[tokio::test]
-        async fn test_a_non_clone_actor_can_be_read() {
-            let mut handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 1 });
-
-            assert_eq!(handle.get().await, 1);
-            assert_eq!(handle.read_handle().get().await, 1);
-        }
-
-        /// The view hides the state, so a method is what reaches past it.
-        #[tokio::test]
-        async fn test_the_state_stays_reachable_through_a_method() {
-            let mut handle = big();
-
-            assert_eq!(handle.data().await, vec![1, 2, 3]);
-        }
     }
 
     fn panic_message(error: tokio::task::JoinError) -> String {
@@ -435,7 +324,7 @@ mod tests {
         assert_eq!(handle.quick().await, 7);
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     struct SlowActor {}
 
     #[actify_macros::actify]
@@ -468,33 +357,33 @@ mod tests {
         }
     }
 
-    impl<M> futures_sink::Sink<M> for Counted<M> {
+    impl<M> Sink<M> for Counted<M> {
         type Error = futures_channel::mpsc::SendError;
 
         fn poll_ready(
-            mut self: std::pin::Pin<&mut Self>,
+            mut self: Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::pin::Pin::new(&mut self.0).poll_ready(cx)
+            Pin::new(&mut self.0).poll_ready(cx)
         }
 
-        fn start_send(mut self: std::pin::Pin<&mut Self>, item: M) -> Result<(), Self::Error> {
+        fn start_send(mut self: Pin<&mut Self>, item: M) -> Result<(), Self::Error> {
             self.1.fetch_add(1, Ordering::Relaxed);
-            std::pin::Pin::new(&mut self.0).start_send(item)
+            Pin::new(&mut self.0).start_send(item)
         }
 
         fn poll_flush(
-            mut self: std::pin::Pin<&mut Self>,
+            mut self: Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::pin::Pin::new(&mut self.0).poll_flush(cx)
+            Pin::new(&mut self.0).poll_flush(cx)
         }
 
         fn poll_close(
-            mut self: std::pin::Pin<&mut Self>,
+            mut self: Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Result<(), Self::Error>> {
-            std::pin::Pin::new(&mut self.0).poll_close(cx)
+            Pin::new(&mut self.0).poll_close(cx)
         }
     }
 
@@ -506,15 +395,11 @@ mod tests {
     /// a program sets rather than something its call volume sets. Here eight
     /// slots hold back a thousand calls.
     ///
-    /// What this does *not* prove is the thing that would be nice to prove.
-    /// Concurrent callers need a handle each either way, so the old
-    /// clone-per-send code bounded the queue at `buffer + calls in flight`,
-    /// which for this shape is the same number. The difference between the two
-    /// is not observable from here: it is that a single handle can no longer
-    /// have two sends in flight, which the borrow checker now refuses, and
-    /// that a send no longer allocates a sender. `compile_fail/
-    /// two_calls_on_one_handle.rs` pins the first; `allocations.rs` pins the
-    /// second.
+    /// Concurrent callers need a handle each, so the ceiling is also what a
+    /// clone-per-send design would give this shape; what tells the two apart
+    /// is that one handle cannot have two sends in flight, which
+    /// `compile_fail/two_calls_on_one_handle.rs` pins, and that a send does
+    /// not allocate a sender, which `allocations.rs` pins.
     #[tokio::test]
     async fn test_a_bounded_job_channel_stops_accepting_while_the_actor_is_busy() {
         const CAPACITY: usize = 4;
@@ -591,7 +476,7 @@ mod tests {
         assert_eq!(handle.count().await, 1000);
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     struct Ledger {
         seen: Vec<usize>,
     }
@@ -617,7 +502,7 @@ mod tests {
     const SYNC_PANIC_PAYLOAD: &str = "sync actor method blew up";
     const ASYNC_PANIC_PAYLOAD: &str = "async actor method blew up";
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     struct PanicStruct {}
 
     #[actify_macros::actify]
@@ -635,116 +520,5 @@ mod tests {
         fn innocent(&self) -> i32 {
             7
         }
-    }
-
-    #[derive(Debug)]
-    struct NonCloneActor {
-        value: i32,
-    }
-
-    #[actify_macros::actify]
-    impl NonCloneActor {
-        fn get_value(&self) -> i32 {
-            self.value
-        }
-
-        fn set_value(&mut self, val: i32) {
-            self.value = val;
-        }
-    }
-
-    impl ToView<i32> for NonCloneActor {
-        fn to_view(&self) -> i32 {
-            self.value
-        }
-    }
-
-    #[tokio::test]
-    async fn test_non_clone_actor() {
-        let mut handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
-        assert_eq!(handle.get_value().await, 42);
-
-        handle.set_value(100).await;
-        assert_eq!(handle.get_value().await, 100);
-
-        let mut handle2 = handle.clone();
-        assert_eq!(handle2.get_value().await, 100);
-    }
-
-    /// A non-Clone actor is read through its view, which `set` on the actor
-    /// type itself must also keep current.
-    #[tokio::test]
-    async fn test_non_clone_actor_is_read_through_its_view() {
-        let mut handle = NonCloneActorHandle::<i32>::new(NonCloneActor { value: 42 });
-
-        handle.set_value(100).await;
-        assert_eq!(handle.get().await, 100);
-
-        handle.set(NonCloneActor { value: 45 }).await;
-        assert_eq!(handle.get().await, 45);
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct BigState {
-        data: Vec<u8>,
-        count: usize,
-    }
-
-    /// Reading part of an actor without cloning all of it is what an
-    /// `#[actify]` method is for, now that no handle takes a closure.
-    #[actify_macros::actify]
-    impl BigState {
-        fn data(&self) -> Vec<u8> {
-            self.data.clone()
-        }
-
-        fn state(&self) -> BigState {
-            self.clone()
-        }
-    }
-
-    impl ToView<usize> for BigState {
-        fn to_view(&self) -> usize {
-            self.count
-        }
-    }
-
-    /// Two handles on the same actor that expose different views used to
-    /// print the same thing, so the view was invisible in a log line.
-    #[tokio::test]
-    async fn test_debug_names_the_view_only_when_it_differs() {
-        let plain = CounterHandle::new(Counter(1));
-        assert_eq!(
-            format!("{plain:?}"),
-            format!("CounterHandle<{}>", type_name::<Counter>())
-        );
-
-        let viewed = BigStateHandle::<usize>::new(BigState {
-            data: vec![1],
-            count: 1,
-        });
-        assert_eq!(
-            format!("{viewed:?}"),
-            format!("BigStateHandle<{}, usize>", type_name::<BigState>())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_clone_actor_with_custom_view() {
-        let mut handle = BigStateHandle::<usize>::new(BigState {
-            data: vec![1, 2, 3],
-            count: 3,
-        });
-
-        assert_eq!(handle.get().await, 3);
-
-        let updated = BigState {
-            data: vec![1, 2, 3, 4],
-            count: 4,
-        };
-        handle.set(updated.clone()).await;
-
-        assert_eq!(handle.get().await, 4);
-        assert_eq!(handle.state().await, updated);
     }
 }

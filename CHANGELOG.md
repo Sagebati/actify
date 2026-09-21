@@ -139,14 +139,64 @@ what makes the channel agnostic in more than name. It is breaking throughout.
   exclusive still work, because only one of them ever exists.
 
 
-- An actor method cannot be named `new`, `builder`, `get`, `set` or
-  `read_handle`.
+- An actor method cannot be named `new` or `builder`.
 
   Those are the methods every generated handle has, so one of the same name
   would be defined on the handle twice. The macro now says so and points at the
   method; before this it was an `E0592` pointing at the `#[actify]` attribute
   with nothing to explain it. `#[actify::skip]` keeps such a method off the
   handle, and it stays callable on the actor type itself.
+
+
+- **Breaking:** a handle is exactly the methods its actor declares.
+
+  `get`, `set` and `read_handle` are gone, and with them `Builtin`, `ToView`,
+  `ReadHandle` and the view type parameter every generated type carried. An
+  actor that wants to be read whole writes a method that returns it, which is
+  what the ready-made handles now do with `to_vec` and `to_string`. An actor
+  type needs no derives: nothing reads it whole and nothing prints it, so
+  `Clone` and `Debug` are no longer required of it.
+
+  `new` and `builder` are the only names a handle reserves.
+
+
+- **Breaking:** an async actor's job channel is any `Sink` and `Stream`.
+
+  `JobSender`, `JobReceiver` and `Closed` leave the async API. Their one job
+  was to bridge `&self` sending to a `Sink`'s `&mut`, by cloning the sink on
+  every send, and that is the clone the next entry removed. `Handle` is
+  generic over `S: Sink<M>` directly and the generated loop over
+  `R: Stream<Item = M>`; both traits are re-exported from the crate root so
+  that naming them needs no dependency on the futures crates.
+
+  The blocking backend keeps its two small traits, now with `Closed` beside
+  them under `actify::blocking`: `Sink` and `Stream` are async traits, and no
+  std trait spans `mpsc::Sender` and `SyncSender`.
+
+
+- **Breaking:** a handle's methods take `&mut self`.
+
+  A handle owns its sending half and sends through it by `&mut`, rather than
+  sharing one behind an `Arc` and cloning it on every call. Cloning a handle
+  clones its sending half, which is the only clone actify makes.
+
+  What this fixes: a bounded call cost three allocations, because cloning a
+  bounded `futures_channel` sender allocates an `Arc<Mutex<SenderTask>>` for
+  the clone's waker slot. It now costs two, like every other call. It also
+  makes a lost wakeup unwriteable - a `futures_channel` sender parks one task
+  at a time, so two tasks polling one sender would overwrite each other's
+  waker - and it moves what bounds a channel from "calls in flight", which
+  nothing controls, to "live handles", which a program sets.
+
+  What it does not fix: a bounded channel still holds `buffer + one slot per
+  sender`, and concurrent callers still need a handle each, so a program that
+  clones a handle per task still raises its own ceiling. That is
+  `futures_channel`'s contract and the docs say so rather than implying a
+  bound the crate cannot deliver.
+
+  Callers hold `let mut handle`. An owned handle gives `&mut` for free, so
+  cloning into a task is unaffected; a handle kept in a struct needs a
+  `&mut self` method or a `.clone()`.
 
 
 - A method cannot declare generic parameters of its own.

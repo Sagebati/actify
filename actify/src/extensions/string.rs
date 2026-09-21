@@ -4,6 +4,9 @@ use core::ops::{Bound, RangeBounds};
 /// An extension trait for `String` actors, made available on the [`Handle`](crate::Handle)
 /// as [`StringHandle`](crate::StringHandle).
 trait ActorString {
+    /// Copies the string out of the actor.
+    fn to_string(&self) -> String;
+
     fn len(&self) -> usize;
 
     fn is_empty(&self) -> bool;
@@ -57,6 +60,22 @@ trait ActorString {
 /// Methods on [`StringHandle`](crate::StringHandle), for an actor holding a `String>`, exposed as [`StringHandle`](crate::StringHandle).
 #[actify]
 impl ActorString for String {
+    /// Copies the string out of the actor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::StringHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = StringHandle::new("hi".to_string());
+    /// assert_eq!(handle.to_string().await, "hi");
+    /// # }
+    /// ```
+    fn to_string(&self) -> String {
+        self.clone()
+    }
+
     /// Returns the length of the string in bytes.
     ///
     /// # Examples
@@ -120,7 +139,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello world".to_string());
     /// handle.truncate(5).await;
-    /// assert_eq!(handle.get().await, "hello");
+    /// assert_eq!(handle.to_string().await, "hello");
     /// # }
     /// ```
     fn truncate(&mut self, new_len: usize) {
@@ -169,7 +188,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello".to_string());
     /// handle.push_str(" world".to_string()).await;
-    /// assert_eq!(handle.get().await, "hello world");
+    /// assert_eq!(handle.to_string().await, "hello world");
     /// # }
     /// ```
     fn push_str(&mut self, string: String) {
@@ -186,7 +205,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello".to_string());
     /// handle.push('!').await;
-    /// assert_eq!(handle.get().await, "hello!");
+    /// assert_eq!(handle.to_string().await, "hello!");
     /// # }
     /// ```
     fn push(&mut self, ch: char) {
@@ -302,7 +321,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hi".to_string());
     /// assert_eq!(handle.pop().await, Some('i'));
-    /// assert_eq!(handle.get().await, "h");
+    /// assert_eq!(handle.to_string().await, "h");
     /// # }
     /// ```
     fn pop(&mut self) -> Option<char> {
@@ -325,7 +344,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("abc".to_string());
     /// assert_eq!(handle.remove(1).await, 'b');
-    /// assert_eq!(handle.get().await, "ac");
+    /// assert_eq!(handle.to_string().await, "ac");
     /// # }
     /// ```
     fn remove(&mut self, idx: usize) -> char {
@@ -348,7 +367,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("ac".to_string());
     /// handle.insert(1, 'b').await;
-    /// assert_eq!(handle.get().await, "abc");
+    /// assert_eq!(handle.to_string().await, "abc");
     /// # }
     /// ```
     fn insert(&mut self, idx: usize, ch: char) {
@@ -371,7 +390,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("ad".to_string());
     /// handle.insert_str(1, "bc".to_string()).await;
-    /// assert_eq!(handle.get().await, "abcd");
+    /// assert_eq!(handle.to_string().await, "abcd");
     /// # }
     /// ```
     fn insert_str(&mut self, idx: usize, string: String) {
@@ -393,7 +412,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello world".to_string());
     /// assert_eq!(handle.drain(..6).await, "hello ");
-    /// assert_eq!(handle.get().await, "world");
+    /// assert_eq!(handle.to_string().await, "world");
     /// # }
     /// ```
     fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> String {
@@ -416,7 +435,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello world".to_string());
     /// assert_eq!(handle.split_off(5).await, " world");
-    /// assert_eq!(handle.get().await, "hello");
+    /// assert_eq!(handle.to_string().await, "hello");
     /// # }
     /// ```
     fn split_off(&mut self, at: usize) -> String {
@@ -439,7 +458,7 @@ impl ActorString for String {
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello world".to_string());
     /// handle.replace_range(0..5, "goodbye".to_string()).await;
-    /// assert_eq!(handle.get().await, "goodbye world");
+    /// assert_eq!(handle.to_string().await, "goodbye world");
     /// # }
     /// ```
     fn replace_range_bounds(&mut self, range: (Bound<usize>, Bound<usize>), replace_with: String) {
@@ -449,11 +468,9 @@ impl ActorString for String {
 
 /// The range methods, written by hand so that a caller can still pass any
 /// range while the call itself carries a concrete pair of bounds.
-impl<V, S> StringHandle<V, S>
+impl<S> StringHandle<S>
 where
-    V: Clone + Send + Sync + 'static,
-    S: actify::JobSender<StringCall<V>> + Clone,
-    String: actify::ToView<V>,
+    S: actify::Sink<StringCall> + Unpin + Clone,
 {
     /// Removes the range from the string and returns what it held.
     ///
@@ -465,7 +482,7 @@ where
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello world".to_string());
     /// assert_eq!(handle.drain(..6).await, "hello ");
-    /// assert_eq!(handle.get().await, "world");
+    /// assert_eq!(handle.to_string().await, "world");
     /// # }
     /// ```
     ///
@@ -490,7 +507,7 @@ where
     /// # async fn main() {
     /// let mut handle = StringHandle::new("hello world".to_string());
     /// handle.replace_range(0..5, "goodbye".to_string()).await;
-    /// assert_eq!(handle.get().await, "goodbye world");
+    /// assert_eq!(handle.to_string().await, "goodbye world");
     /// # }
     /// ```
     ///
@@ -520,10 +537,10 @@ mod tests {
         handle.push_str("hello".to_string()).await;
         handle.push(' ').await;
         handle.push_str("world".to_string()).await;
-        assert_eq!(handle.get().await, "hello world");
+        assert_eq!(handle.to_string().await, "hello world");
 
         handle.truncate(5).await;
-        assert_eq!(handle.get().await, "hello");
+        assert_eq!(handle.to_string().await, "hello");
 
         handle.clear().await;
         assert!(handle.is_empty().await);
@@ -567,10 +584,10 @@ mod tests {
         assert_eq!(handle.pop().await, Some('d'));
         assert_eq!(handle.remove(1).await, 'e');
         assert_eq!(handle.drain(..4).await, "hllo");
-        assert_eq!(handle.get().await, " worl");
+        assert_eq!(handle.to_string().await, " worl");
 
         assert_eq!(handle.split_off(1).await, "worl");
-        assert_eq!(handle.get().await, " ");
+        assert_eq!(handle.to_string().await, " ");
 
         let mut empty = StringHandle::new(String::new());
         assert_eq!(empty.pop().await, None);
@@ -581,12 +598,12 @@ mod tests {
         let mut handle = StringHandle::new("ad".to_string());
 
         handle.insert(1, 'c').await;
-        assert_eq!(handle.get().await, "acd");
+        assert_eq!(handle.to_string().await, "acd");
 
         handle.insert_str(1, "b".to_string()).await;
-        assert_eq!(handle.get().await, "abcd");
+        assert_eq!(handle.to_string().await, "abcd");
 
         handle.replace_range(1..3, "xyz".to_string()).await;
-        assert_eq!(handle.get().await, "axyzd");
+        assert_eq!(handle.to_string().await, "axyzd");
     }
 }

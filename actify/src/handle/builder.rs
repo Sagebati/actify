@@ -1,22 +1,22 @@
+//! Building an async actor, and choosing where it runs.
+
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::panic::Location;
 
-use super::handle::{DefaultReceiver, DefaultSender, Handle, ToView};
-use crate::actor::{Actor, serve};
-use crate::channel::{JobReceiver, JobSender};
+use futures_core::Stream;
+use futures_sink::Sink;
+
+use super::{DefaultReceiver, DefaultSender, Handle};
+use crate::actor::Actor;
 
 /// Starts a builder for an actor served with the message type `M`.
 ///
 /// Generated code calls this, which is the only way to build an actor.
 #[doc(hidden)]
 #[track_caller]
-pub fn builder<T, V, M>(val: T) -> HandleBuilder<T, V, M>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-{
+pub fn builder<T, M>(val: T) -> HandleBuilder<T, M> {
     HandleBuilder::new(val)
 }
 
@@ -24,15 +24,14 @@ where
 #[cfg(feature = "tokio")]
 #[doc(hidden)]
 #[track_caller]
-pub fn spawn<T, V, M, F, Fut>(val: T, run: F) -> Handle<T, V, M>
+pub fn spawn<T, M, F, Fut>(val: T, run: F) -> Handle<T, M>
 where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    T: Send + Sync + 'static,
     M: Send + 'static,
     F: FnOnce(DefaultReceiver<M>, Actor<T>) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    let (handle, actor) = builder::<T, V, M>(val).build(run);
+    let (handle, actor) = builder(val).build(run);
     tokio::spawn(actor);
     handle
 }
@@ -52,29 +51,33 @@ pub struct DefaultChannel;
 ///
 /// ```
 /// # use actify::actify;
-/// # #[derive(Clone, Debug, PartialEq)]
+/// # #[derive(Debug)]
 /// # struct Counter(i32);
 /// # #[actify]
-/// # impl Counter {}
+/// # impl Counter {
+/// #     fn add(&mut self, value: i32) -> i32 { self.0 += value; self.0 }
+/// # }
 /// # #[tokio::main]
 /// # async fn main() {
 /// let (mut handle, actor) = CounterHandle::builder(Counter(0)).build();
 /// tokio::spawn(actor);
 ///
-/// handle.set(Counter(1)).await;
-/// assert_eq!(handle.get().await, Counter(1));
+/// assert_eq!(handle.add(1).await, 1);
 /// # }
 /// ```
 ///
 /// [`channel`](Self::channel) replaces the default queue with one the caller
-/// owns, which is how the bound and the backing crate are chosen:
+/// owns, which is how the bound and the backing crate are chosen. Any
+/// [`Sink`] and [`Stream`] pair over the message type qualifies:
 ///
 /// ```
 /// # use actify::actify;
-/// # #[derive(Clone, Debug, PartialEq)]
+/// # #[derive(Debug)]
 /// # struct Counter(i32);
 /// # #[actify]
-/// # impl Counter {}
+/// # impl Counter {
+/// #     fn add(&mut self, value: i32) -> i32 { self.0 += value; self.0 }
+/// # }
 /// # #[tokio::main]
 /// # async fn main() {
 /// let (tx, rx) = futures_channel::mpsc::channel(8);
@@ -82,17 +85,17 @@ pub struct DefaultChannel;
 /// let (mut handle, actor) = CounterHandle::builder(Counter(0)).channel((tx, rx)).build();
 /// tokio::spawn(actor);
 ///
-/// assert_eq!(handle.get().await, Counter(0));
+/// assert_eq!(handle.add(1).await, 1);
 /// # }
 /// ```
-pub struct HandleBuilder<T, V, M, C = DefaultChannel> {
+pub struct HandleBuilder<T, M, C = DefaultChannel> {
     val: T,
     spawned_at: &'static Location<'static>,
     channel: C,
-    view: PhantomData<fn() -> (V, M)>,
+    message: PhantomData<fn() -> M>,
 }
 
-impl<T, V, M, C> Debug for HandleBuilder<T, V, M, C> {
+impl<T, M, C> Debug for HandleBuilder<T, M, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HandleBuilder")
             .field("spawned_at", &self.spawned_at)
@@ -100,19 +103,15 @@ impl<T, V, M, C> Debug for HandleBuilder<T, V, M, C> {
     }
 }
 
-impl<T, V, M> HandleBuilder<T, V, M, DefaultChannel>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-{
+impl<T, M> HandleBuilder<T, M, DefaultChannel> {
     /// Captures the call site so the actor's span names where it was built.
     #[track_caller]
-    pub(crate) fn new(val: T) -> Self {
+    fn new(val: T) -> Self {
         HandleBuilder {
             val,
             spawned_at: Location::caller(),
             channel: DefaultChannel,
-            view: PhantomData,
+            message: PhantomData,
         }
     }
 
@@ -130,16 +129,16 @@ where
     /// sender`, and a handle is a sender, so a program raises its own ceiling
     /// by cloning handles. Concurrency costs handles either way, since a
     /// handle sends through `&mut` and so carries one call at a time.
-    pub fn channel<S, R>(self, channel: (S, R)) -> HandleBuilder<T, V, M, (S, R)>
+    pub fn channel<S, R>(self, channel: (S, R)) -> HandleBuilder<T, M, (S, R)>
     where
-        S: JobSender<M>,
-        R: JobReceiver<M>,
+        S: Sink<M>,
+        R: Stream<Item = M>,
     {
         HandleBuilder {
             val: self.val,
             spawned_at: self.spawned_at,
             channel,
-            view: PhantomData,
+            message: PhantomData,
         }
     }
 
@@ -150,8 +149,9 @@ where
     /// until the caller spawns it. Dropping it without spawning leaves a
     /// handle whose every call panics, reporting that the actor is not
     /// running.
-    pub fn build<F, Fut>(self, run: F) -> (Handle<T, V, M>, impl Future<Output = ()> + Send)
+    pub fn build<F, Fut>(self, run: F) -> (Handle<T, M>, impl Future<Output = ()> + Send)
     where
+        T: Send + Sync + 'static,
         M: Send + 'static,
         F: FnOnce(DefaultReceiver<M>, Actor<T>) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send,
@@ -161,20 +161,16 @@ where
     }
 }
 
-impl<T, V, M, S, R> HandleBuilder<T, V, M, (S, R)>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: JobSender<M>,
-    R: JobReceiver<M>,
-{
+impl<T, M, S, R> HandleBuilder<T, M, (S, R)> {
     /// Returns the handle and the future that serves it, over the channel
     /// given to [`channel`](HandleBuilder::channel).
     ///
     /// The actor does nothing until the future is polled, so nothing runs
     /// until the caller spawns it.
-    pub fn build<F, Fut>(self, run: F) -> (Handle<T, V, M, S>, impl Future<Output = ()> + Send)
+    pub fn build<F, Fut>(self, run: F) -> (Handle<T, M, S>, impl Future<Output = ()> + Send)
     where
+        T: Send + Sync + 'static,
+        R: Send + 'static,
         F: FnOnce(R, Actor<T>) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send,
     {
@@ -183,30 +179,28 @@ where
             val: self.val,
             spawned_at: self.spawned_at,
             channel: DefaultChannel,
-            view: PhantomData,
+            message: PhantomData,
         }
         .with_channel(tx, rx, run)
     }
 }
 
-impl<T, V, M> HandleBuilder<T, V, M, DefaultChannel>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-{
+impl<T, M> HandleBuilder<T, M, DefaultChannel> {
     fn with_channel<S, R, F, Fut>(
         self,
         tx: S,
         rx: R,
         run: F,
-    ) -> (Handle<T, V, M, S>, impl Future<Output = ()> + Send)
+    ) -> (Handle<T, M, S>, impl Future<Output = ()> + Send)
     where
-        S: JobSender<M>,
+        T: Send + Sync + 'static,
         R: Send + 'static,
         F: FnOnce(R, Actor<T>) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send,
     {
-        let actor = Actor::new(self.val, self.spawned_at);
-        (Handle::from_sender(tx), serve(rx, actor, run))
+        (
+            Handle::from_sender(tx),
+            Actor::serve(self.val, self.spawned_at, rx, run),
+        )
     }
 }

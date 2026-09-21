@@ -1,6 +1,13 @@
-pub(crate) mod map;
-pub(crate) mod option;
-pub(crate) mod set;
-pub(crate) mod string;
-pub(crate) mod vec;
-pub(crate) mod vecdeque;
+mod map;
+mod option;
+mod set;
+mod string;
+mod vec;
+mod vecdeque;
+
+pub use map::HashMapHandle;
+pub use option::OptionHandle;
+pub use set::HashSetHandle;
+pub use string::StringHandle;
+pub use vec::VecHandle;
+pub use vecdeque::VecDequeHandle;

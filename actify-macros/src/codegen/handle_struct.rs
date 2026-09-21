@@ -14,72 +14,58 @@ use super::call::{
     Carrier, call_type, carrier, declared_params, param_names, run_ident, variant_ident,
 };
 
-/// The view parameter the generated handle declares.
-fn view() -> Ident {
-    Ident::new("__ActifyV", Span::call_site())
-}
-
 /// The sender parameter the generated handle declares.
 fn sender() -> Ident {
     Ident::new("__ActifyS", Span::call_site())
 }
 
-/// Generates the handle struct, its constructors, the calls every handle has,
-/// and one method per actified method.
+/// Generates the handle struct, its constructors, and one method per actified
+/// method.
 pub fn generate(info: &ImplInfo) -> TokenStream {
     let attrs = &info.attributes;
     let handle = &info.handle_trait_ident;
     let impl_type = &info.impl_type;
-    let view = view();
     let sender = sender();
-    let call_ty = call_type(info, &view);
+    let call_ty = call_type(info);
     let root = backend::root(info);
-    let asyncness = backend::asyncness(info);
-    let awaiter = backend::awaiter(info);
-    let receiver = backend::receiver(info);
 
     let declared = declared_params(info);
     let names = param_names(info);
-    let handle_ty = quote! { #handle<#(#names,)* #view, #sender> };
-    let inner = quote! { #root::Handle<#impl_type, #view, #call_ty, #sender> };
+    let handle_ty = quote! { #handle<#(#names,)* #sender> };
+    let inner = quote! { #root::Handle<#impl_type, #call_ty, #sender> };
 
     // Naming the type takes the parameters alone; only the impls carry bounds.
     let mut bare = info.generics.clone();
-    bare.params.push(syn::parse_quote!(#view));
     bare.params.push(syn::parse_quote!(#sender));
     let (bare_generics, _, _) = bare.split_for_impl();
 
     // A handle is cloned by cloning its sending half, so it is `Clone` exactly
     // when that is.
     let mut cloneable = info.generics.clone();
-    cloneable.params.push(syn::parse_quote!(#view));
     cloneable
         .params
         .push(syn::parse_quote!(#sender: ::std::clone::Clone));
     let (clone_generics, _, _) = cloneable.split_for_impl();
 
-    // What every call on this handle needs: a view the actor can produce, and
-    // a channel that carries this actor's messages.
+    // What every call on this handle needs: a channel that carries this
+    // actor's messages, and an actor the backend can serve.
     let sender_bound = backend::sender_bound(info, &call_ty);
+    let actor_bound = backend::actor_bound(info);
     let mut full = info.generics.clone();
-    full.params
-        .push(syn::parse_quote!(#view: ::std::clone::Clone + Send + Sync + 'static));
     full.params.push(syn::parse_quote!(#sender: #sender_bound));
     full.make_where_clause()
         .predicates
-        .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
+        .push(syn::parse_quote!(#impl_type: #actor_bound));
     let (full_generics, _, full_where) = full.split_for_impl();
 
     // The constructors live where the sender is already decided, so that
     // `Handle::new(val)` has nothing left to infer.
     let mut made = info.generics.clone();
-    made.params
-        .push(syn::parse_quote!(#view: ::std::clone::Clone + Send + Sync + 'static));
     made.make_where_clause()
         .predicates
-        .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
+        .push(syn::parse_quote!(#impl_type: #actor_bound));
     let (made_generics, _, made_where) = made.split_for_impl();
-    let made_ty = quote! { #handle<#(#names,)* #view, #root::DefaultSender<#call_ty>> };
+    let made_ty = quote! { #handle<#(#names,)* #root::DefaultSender<#call_ty>> };
 
     let constructors = constructors(info);
     let builder = generate_builder(info);
@@ -97,7 +83,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     quote! {
         #[doc = #doc]
         #(#attrs)*
-        pub struct #handle <#(#declared,)* #view = #impl_type, #sender = #root::DefaultSender<#call_ty>>(
+        pub struct #handle <#(#declared,)* #sender = #root::DefaultSender<#call_ty>>(
             #inner
         );
 
@@ -111,21 +97,12 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         #(#attrs)*
         impl #bare_generics ::std::fmt::Debug for #handle_ty {
             fn fmt(&self, __actify_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                // The view is named only when it differs, so a log line says
-                // which of two handles on the same actor it came from.
-                let __actify_actor = ::std::any::type_name::<#impl_type>();
-                let __actify_view = ::std::any::type_name::<#view>();
-                if __actify_actor == __actify_view {
-                    ::std::write!(__actify_f, "{}<{}>", #debug_name, __actify_actor)
-                } else {
-                    ::std::write!(
-                        __actify_f,
-                        "{}<{}, {}>",
-                        #debug_name,
-                        __actify_actor,
-                        __actify_view
-                    )
-                }
+                ::std::write!(
+                    __actify_f,
+                    "{}<{}>",
+                    #debug_name,
+                    ::std::any::type_name::<#impl_type>()
+                )
             }
         }
 
@@ -136,31 +113,6 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
 
         #(#attrs)*
         impl #full_generics #handle_ty #full_where {
-            /// Returns the actor's current view.
-            ///
-            /// # Panics
-            ///
-            /// Panics if the actor has stopped.
-            pub #asyncness fn get(#receiver) -> #view {
-                self.0.get() #awaiter
-            }
-
-            /// Overwrites the actor's value.
-            ///
-            /// # Panics
-            ///
-            /// Panics if the actor has stopped.
-            pub #asyncness fn set(#receiver, __actify_val: #impl_type) {
-                self.0.set(__actify_val) #awaiter
-            }
-
-            /// Returns a read-only handle to the same actor.
-            pub fn read_handle(
-                &self,
-            ) -> #root::ReadHandle<#impl_type, #view, #call_ty, #sender> {
-                self.0.read_handle()
-            }
-
             #(#methods)*
         }
 
@@ -172,7 +124,6 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
 fn constructors(info: &ImplInfo) -> TokenStream {
     let handle = &info.handle_trait_ident;
     let impl_type = &info.impl_type;
-    let view = view();
     let root = backend::root(info);
 
     let run = run_ident(info);
@@ -210,7 +161,7 @@ fn constructors(info: &ImplInfo) -> TokenStream {
 
         #[doc = #builder_doc]
         #[track_caller]
-        pub fn builder(__actify_val: #impl_type) -> #builder<#(#names,)* #view> {
+        pub fn builder(__actify_val: #impl_type) -> #builder<#(#names,)*> {
             #builder(#root::__private::builder(__actify_val))
         }
     }
@@ -230,29 +181,27 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
     let handle = &info.handle_trait_ident;
     let builder = builder_ident(info);
     let impl_type = &info.impl_type;
-    let view = view();
-    let call_ty = call_type(info, &view);
+    let call_ty = call_type(info);
     let root = backend::root(info);
     let actor_type = backend::actor_type(info);
     let sender_bound = backend::sender_bound(info, &call_ty);
+    let receiver_bound = backend::receiver_bound(info, &call_ty);
+    let actor_bound = backend::actor_bound(info);
 
     let declared = declared_params(info);
     let names = param_names(info);
     let channel = Ident::new("__ActifyC", Span::call_site());
-    let builder_ty = quote! { #builder<#(#names,)* #view, #channel> };
+    let builder_ty = quote! { #builder<#(#names,)* #channel> };
 
     let mut common = info.generics.clone();
     common
-        .params
-        .push(syn::parse_quote!(#view: ::std::clone::Clone + Send + Sync + 'static));
-    common
         .make_where_clause()
         .predicates
-        .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
+        .push(syn::parse_quote!(#impl_type: #actor_bound));
 
     let default_channel = common.clone();
     let (default_generics, _, default_where) = default_channel.split_for_impl();
-    let default_ty = quote! { #builder<#(#names,)* #view, #root::DefaultChannel> };
+    let default_ty = quote! { #builder<#(#names,)* #root::DefaultChannel> };
 
     let mut own_channel = common.clone();
     own_channel
@@ -260,12 +209,11 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
         .push(syn::parse_quote!(__ActifyTx: #sender_bound));
     own_channel
         .params
-        .push(syn::parse_quote!(__ActifyRx: #root::JobReceiver<#call_ty>));
+        .push(syn::parse_quote!(__ActifyRx: #receiver_bound));
     let (own_generics, _, own_where) = own_channel.split_for_impl();
-    let own_ty = quote! { #builder<#(#names,)* #view, (__ActifyTx, __ActifyRx)> };
+    let own_ty = quote! { #builder<#(#names,)* (__ActifyTx, __ActifyRx)> };
 
     let mut bare = info.generics.clone();
-    bare.params.push(syn::parse_quote!(#view));
     bare.params.push(syn::parse_quote!(#channel));
     let (bare_generics, _, _) = bare.split_for_impl();
     let bare_generics_tokens = quote! { #bare_generics };
@@ -297,9 +245,8 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
         #(#attrs)*
         pub struct #builder<
             #(#declared,)*
-            #view = #impl_type,
             #channel = #root::DefaultChannel,
-        >(#root::HandleBuilder<#impl_type, #view, #call_ty, #channel>);
+        >(#root::HandleBuilder<#impl_type, #call_ty, #channel>);
 
         #(#attrs)*
         impl #bare_generics ::std::fmt::Debug for #builder_ty {
@@ -319,10 +266,10 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
             pub fn channel<__ActifyTx, __ActifyRx>(
                 self,
                 __actify_channel: (__ActifyTx, __ActifyRx),
-            ) -> #builder<#(#names,)* #view, (__ActifyTx, __ActifyRx)>
+            ) -> #builder<#(#names,)* (__ActifyTx, __ActifyRx)>
             where
                 __ActifyTx: #sender_bound,
-                __ActifyRx: #root::JobReceiver<#call_ty>,
+                __ActifyRx: #receiver_bound,
             {
                 #builder(self.0.channel(__actify_channel))
             }
@@ -331,7 +278,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
             pub fn build(
                 self,
             ) -> (
-                #handle<#(#names,)* #view, #root::DefaultSender<#call_ty>>,
+                #handle<#(#names,)* #root::DefaultSender<#call_ty>>,
                 #actor_type,
             ) {
                 let (__actify_handle, __actify_actor) = self.0.build(#run);
@@ -345,7 +292,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
             pub fn build(
                 self,
             ) -> (
-                #handle<#(#names,)* #view, __ActifyTx>,
+                #handle<#(#names,)* __ActifyTx>,
                 #actor_type,
             ) {
                 let (__actify_handle, __actify_actor) = self.0.build(#run);

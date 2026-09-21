@@ -4,6 +4,9 @@ use core::ops::{Bound, RangeBounds};
 /// An extension trait for `Vec<T>` actors, made available on the [`Handle`](crate::Handle)
 /// as [`VecHandle`](crate::VecHandle).
 trait ActorVec<T> {
+    /// Copies the vector out of the actor, as `[T]::to_vec` would.
+    fn to_vec(&self) -> Vec<T>;
+
     fn push(&mut self, value: T);
 
     fn is_empty(&self) -> bool;
@@ -62,6 +65,22 @@ impl<T> ActorVec<T> for Vec<T>
 where
     T: Clone + Send + Sync + 'static,
 {
+    /// Copies the vector out of the actor, as `[T]::to_vec` would.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::VecHandle;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecHandle::new(vec![1, 2]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
+    /// # }
+    /// ```
+    fn to_vec(&self) -> Vec<T> {
+        self.clone()
+    }
+
     /// Appends an element to the back of a collection.
     ///
     /// # Examples
@@ -72,7 +91,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2]);
     /// handle.push(100).await;
-    /// assert_eq!(handle.get().await, vec![1, 2, 100]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 100]);
     /// # }
     /// ```
     fn push(&mut self, value: T) {
@@ -112,7 +131,7 @@ where
     /// let mut handle = VecHandle::new(vec![1, 2]);
     /// let res = handle.drain(..).await;
     /// assert_eq!(res, vec![1, 2]);
-    /// assert_eq!(handle.get().await, Vec::<i32>::new());
+    /// assert_eq!(handle.to_vec().await, Vec::<i32>::new());
     /// # }
     /// ```
     fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T> {
@@ -145,7 +164,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert_eq!(handle.pop().await, Some(3));
-    /// assert_eq!(handle.get().await, vec![1, 2]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
     /// # }
     /// ```
     fn pop(&mut self) -> Option<T> {
@@ -183,7 +202,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert_eq!(handle.remove(1).await, 2);
-    /// assert_eq!(handle.get().await, vec![1, 3]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 3]);
     /// # }
     /// ```
     fn remove(&mut self, index: usize) -> T {
@@ -205,7 +224,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2, 3, 4]);
     /// assert_eq!(handle.swap_remove(1).await, 2);
-    /// assert_eq!(handle.get().await, vec![1, 4, 3]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 4, 3]);
     /// # }
     /// ```
     fn swap_remove(&mut self, index: usize) -> T {
@@ -226,7 +245,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 3]);
     /// handle.insert(1, 2).await;
-    /// assert_eq!(handle.get().await, vec![1, 2, 3]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
     /// # }
     /// ```
     fn insert(&mut self, index: usize, element: T) {
@@ -243,7 +262,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
     /// handle.truncate(2).await;
-    /// assert_eq!(handle.get().await, vec![1, 2]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
     /// # }
     /// ```
     fn truncate(&mut self, len: usize) {
@@ -260,7 +279,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// handle.reverse().await;
-    /// assert_eq!(handle.get().await, vec![3, 2, 1]);
+    /// assert_eq!(handle.to_vec().await, vec![3, 2, 1]);
     /// # }
     /// ```
     fn reverse(&mut self) {
@@ -284,7 +303,7 @@ where
     /// let mut handle = VecHandle::new(vec![1, 2, 3, 4, 5]);
     /// let tail = handle.split_off(3).await;
     /// assert_eq!(tail, vec![4, 5]);
-    /// assert_eq!(handle.get().await, vec![1, 2, 3]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
     /// # }
     /// ```
     fn split_off(&mut self, at: usize) -> Vec<T> {
@@ -292,7 +311,6 @@ where
     }
 
     /// Returns a clone of the element at the given index, or `None` if out of bounds.
-    /// Named `get_index` to avoid conflict with [`Handle::get`](crate::Handle::get).
     ///
     /// # Examples
     ///
@@ -371,7 +389,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2]);
     /// handle.extend(vec![3, 4]).await;
-    /// assert_eq!(handle.get().await, vec![1, 2, 3, 4]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3, 4]);
     /// # }
     /// ```
     fn extend(&mut self, items: Vec<T>) {
@@ -388,7 +406,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 1, 2, 3, 3]);
     /// handle.dedup().await;
-    /// assert_eq!(handle.get().await, vec![1, 2, 3]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
     /// # }
     /// ```
     fn dedup(&mut self)
@@ -408,7 +426,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![3, 1, 2]);
     /// handle.sort().await;
-    /// assert_eq!(handle.get().await, vec![1, 2, 3]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
     /// # }
     /// ```
     fn sort(&mut self)
@@ -432,7 +450,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// handle.swap(0, 2).await;
-    /// assert_eq!(handle.get().await, vec![3, 2, 1]);
+    /// assert_eq!(handle.to_vec().await, vec![3, 2, 1]);
     /// # }
     /// ```
     fn swap(&mut self, a: usize, b: usize) {
@@ -450,9 +468,9 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2]);
     /// handle.resize(4, 9).await;
-    /// assert_eq!(handle.get().await, vec![1, 2, 9, 9]);
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 9, 9]);
     /// handle.resize(1, 0).await;
-    /// assert_eq!(handle.get().await, vec![1]);
+    /// assert_eq!(handle.to_vec().await, vec![1]);
     /// # }
     /// ```
     fn resize(&mut self, new_len: usize, value: T) {
@@ -462,12 +480,10 @@ where
 
 /// The range methods, written by hand so that a caller can still pass any
 /// range while the call itself carries a concrete pair of bounds.
-impl<T, V, S> VecHandle<T, V, S>
+impl<T, S> VecHandle<T, S>
 where
     T: Clone + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: actify::JobSender<VecCall<T, V>> + Clone,
-    Vec<T>: actify::ToView<V> + Send + Sync + 'static,
+    S: actify::Sink<VecCall<T>> + Unpin + Clone,
 {
     /// Removes the range from the vector and returns what it held.
     ///
@@ -479,7 +495,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecHandle::new(vec![1, 2, 3]);
     /// assert_eq!(handle.drain(1..).await, vec![2, 3]);
-    /// assert_eq!(handle.get().await, vec![1]);
+    /// assert_eq!(handle.to_vec().await, vec![1]);
     /// # }
     /// ```
     ///
@@ -518,19 +534,19 @@ mod tests {
         let mut handle = VecHandle::new(vec![1, 2, 3, 4]);
 
         assert_eq!(handle.pop().await, Some(4));
-        assert_eq!(handle.get().await, vec![1, 2, 3]);
+        assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
 
         assert_eq!(handle.remove(0).await, 1);
-        assert_eq!(handle.get().await, vec![2, 3]);
+        assert_eq!(handle.to_vec().await, vec![2, 3]);
 
         handle.extend(vec![4, 5]).await;
         // swap_remove moves the last element into the freed slot, which is what
         // distinguishes it from remove
         assert_eq!(handle.swap_remove(0).await, 2);
-        assert_eq!(handle.get().await, vec![5, 3, 4]);
+        assert_eq!(handle.to_vec().await, vec![5, 3, 4]);
 
         assert_eq!(handle.split_off(1).await, vec![3, 4]);
-        assert_eq!(handle.get().await, vec![5]);
+        assert_eq!(handle.to_vec().await, vec![5]);
         handle.clear().await;
         assert!(handle.is_empty().await);
         assert_eq!(handle.pop().await, None);
@@ -541,10 +557,10 @@ mod tests {
         let mut handle = VecHandle::new(vec![3, 1, 2, 2]);
 
         handle.sort().await;
-        assert_eq!(handle.get().await, vec![1, 2, 2, 3]);
+        assert_eq!(handle.to_vec().await, vec![1, 2, 2, 3]);
 
         handle.dedup().await;
-        assert_eq!(handle.get().await, vec![1, 2, 3]);
+        assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
     }
 
     #[tokio::test]
@@ -552,13 +568,13 @@ mod tests {
         let mut handle = VecHandle::new(vec![1, 2]);
 
         handle.insert(1, 9).await;
-        assert_eq!(handle.get().await, vec![1, 9, 2]);
+        assert_eq!(handle.to_vec().await, vec![1, 9, 2]);
 
         handle.extend(vec![3, 4]).await;
-        assert_eq!(handle.get().await, vec![1, 9, 2, 3, 4]);
+        assert_eq!(handle.to_vec().await, vec![1, 9, 2, 3, 4]);
 
         handle.truncate(2).await;
-        assert_eq!(handle.get().await, vec![1, 9]);
+        assert_eq!(handle.to_vec().await, vec![1, 9]);
     }
 
     #[tokio::test]
@@ -566,12 +582,12 @@ mod tests {
         let mut handle = VecHandle::new(vec![1, 2, 3]);
 
         handle.swap(0, 2).await;
-        assert_eq!(handle.get().await, vec![3, 2, 1]);
+        assert_eq!(handle.to_vec().await, vec![3, 2, 1]);
 
         handle.resize(5, 9).await;
-        assert_eq!(handle.get().await, vec![3, 2, 1, 9, 9]);
+        assert_eq!(handle.to_vec().await, vec![3, 2, 1, 9, 9]);
 
         handle.resize(2, 0).await;
-        assert_eq!(handle.get().await, vec![3, 2]);
+        assert_eq!(handle.to_vec().await, vec![3, 2]);
     }
 }

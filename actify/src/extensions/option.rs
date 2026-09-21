@@ -83,7 +83,7 @@ where
     /// # async fn main() {
     /// let mut handle = OptionHandle::new(Some(1));
     /// assert_eq!(handle.replace(2).await, Some(1));
-    /// assert_eq!(handle.get().await, Some(2));
+    /// assert_eq!(handle.take().await, Some(2));
     /// # }
     /// ```
     fn replace(&mut self, value: T) -> Option<T> {

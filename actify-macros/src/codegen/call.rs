@@ -6,7 +6,7 @@
 
 use super::backend;
 use crate::parse::{ImplInfo, MethodInfo};
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Attribute, GenericParam, Ident};
 
@@ -21,11 +21,6 @@ fn cfg_attrs(method: &MethodInfo) -> Vec<&Attribute> {
         .iter()
         .filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
         .collect()
-}
-
-/// The view type parameter the generated enum declares.
-pub fn view_param() -> Ident {
-    Ident::new("__ActifyV", Span::call_site())
 }
 
 /// How a variant reaches the method it stands for.
@@ -86,12 +81,16 @@ pub fn variant_ident(method: &MethodInfo) -> Ident {
     Ident::new(&pascal, method.ident.span())
 }
 
-/// Names the generated enum with a view type the caller chooses, as in
-/// `GreeterCall<__V>`.
-pub fn call_type(info: &ImplInfo, view: &Ident) -> TokenStream {
+/// Names the generated enum with the impl block's parameters, as in
+/// `GreeterCall` or `BagCall<T>`.
+pub fn call_type(info: &ImplInfo) -> TokenStream {
     let call = &info.call_enum_ident;
     let params = param_names(info);
-    quote! { #call<#(#params,)* #view> }
+    if params.is_empty() {
+        quote! { #call }
+    } else {
+        quote! { #call<#(#params,)*> }
+    }
 }
 
 /// The impl block's parameters by name alone, for naming a type that takes them.
@@ -152,45 +151,45 @@ pub fn run_ident(info: &ImplInfo) -> Ident {
     )
 }
 
-/// Generates the message enum, the glue that lets it carry a builtin, a
-/// `Debug` that names variants without asking anything of their fields, and
-/// the loop that serves the actor.
+/// Generates the message enum, a `Debug` that names variants without asking
+/// anything of their fields, and the loop that serves the actor.
+///
+/// The enum carries one variant the actor never sends: a marker holding
+/// `PhantomData<fn() -> ImplType>`, which is what keeps an impl-block type
+/// parameter "used" when no method's arguments or result mention it. Rust
+/// rejects an enum with an unused parameter outright. It also carries
+/// `Infallible`, so the variant is uninhabited and its arms are empty matches.
 pub fn generate(info: &ImplInfo) -> TokenStream {
     let attrs = &info.attributes;
     let call = &info.call_enum_ident;
     let run_ident = run_ident(info);
     let impl_type = &info.impl_type;
-    let view = view_param();
 
     let declared = declared_params(info);
-    let call_ty = call_type(info, &view);
+    let call_ty = call_type(info);
+    let (impl_generics, _, where_clause) = info.generics.split_for_impl();
 
-    let (_, _, where_clause) = info.generics.split_for_impl();
-
-    // The impls take the block's own parameters plus the view, which the enum
-    // declares with a default so `GreeterCall` alone still names something.
-    let mut with_view = info.generics.clone();
-    with_view.params.push(syn::parse_quote!(#view));
-    let (impl_generics, _, _) = with_view.split_for_impl();
+    // The enum's own parameters, with bounds stripped, only when there are any:
+    // `Foo<>` is legal but reads badly in every error that names it.
+    let enum_params = (!declared.is_empty()).then(|| quote! { <#(#declared,)*> });
 
     let root = backend::root(info);
     let asyncness = backend::asyncness(info);
     let wait_param = backend::wait_param(info);
     let recv = backend::recv(info);
+    let receiver_bound = backend::receiver_bound(info, &call_ty);
+    let actor_bound = backend::actor_bound(info);
 
     // The loop is a free function rather than a method, so nothing the actor
     // type declares has to be a trait implementation.
     let mut run_generics = info.generics.clone();
     run_generics
         .params
-        .push(syn::parse_quote!(#view: Send + 'static));
-    run_generics
-        .params
-        .push(syn::parse_quote!(__ActifyRx: #root::JobReceiver<#call_ty>));
+        .push(syn::parse_quote!(__ActifyRx: #receiver_bound));
     run_generics
         .make_where_clause()
         .predicates
-        .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
+        .push(syn::parse_quote!(#impl_type: #actor_bound));
     let (run_generics_impl, _, run_where) = run_generics.split_for_impl();
 
     let variants = info.methods.iter().map(|method| {
@@ -262,27 +261,24 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     quote! {
         #[doc = #enum_doc]
         #(#attrs)*
-        pub enum #call<#(#declared,)* #view = #impl_type> {
-            /// One of the calls every handle has, whatever its actor declares.
-            __ActifyBuiltin(#root::Builtin<#impl_type, #view>),
+        pub enum #call #enum_params {
             #(#variants)*
-        }
-
-        #(#attrs)*
-        impl #impl_generics ::std::convert::From<#root::Builtin<#impl_type, #view>>
-            for #call_ty #where_clause
-        {
-            fn from(__actify_builtin: #root::Builtin<#impl_type, #view>) -> Self {
-                #call::__ActifyBuiltin(__actify_builtin)
-            }
+            /// Ties the enum to every parameter of the actor type, whether or
+            /// not a call mentions it. Uninhabited, so it is never a value and
+            /// every match on it proves as much for free.
+            #[doc(hidden)]
+            __ActifyMarker(
+                ::std::marker::PhantomData<fn() -> #impl_type>,
+                ::std::convert::Infallible,
+            ),
         }
 
         #(#attrs)*
         impl #impl_generics ::std::fmt::Debug for #call_ty #where_clause {
             fn fmt(&self, __actify_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                let __actify_variant = match self {
-                    #call::__ActifyBuiltin(_) => "Builtin",
+                let __actify_variant: &str = match self {
                     #(#debug_arms)*
+                    #call::__ActifyMarker(_, __actify_never) => match *__actify_never {},
                 };
                 ::std::write!(__actify_f, "{}::{}", #call_name, __actify_variant)
             }
@@ -300,10 +296,8 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         ) #run_where {
             while let Some(__actify_call) = #recv {
                 match __actify_call {
-                    #call::__ActifyBuiltin(__actify_builtin) => {
-                        #root::__private::run_builtin(&mut __actify_actor, __actify_builtin)
-                    }
                     #(#arms)*
+                    #call::__ActifyMarker(_, __actify_never) => match __actify_never {},
                 }
             }
         }

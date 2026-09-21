@@ -1,6 +1,6 @@
 //! Tests actify as any user that imports the library would.
 
-use actify::{ToView, actify};
+use actify::actify;
 use std::{collections::HashMap, fmt::Debug, sync::Mutex};
 
 fn main() {}
@@ -54,13 +54,17 @@ impl SomeStruct {
     }
 }
 
-/// An actor with no methods of its own: an empty `#[actify]` block gives it a
-/// handle carrying the built-in calls and nothing else.
+/// An actor with one method, kept around for the tests that only need a
+/// handle to hold and drop.
 #[derive(Clone, Debug, PartialEq)]
 struct Plain(i32);
 
 #[actify]
-impl Plain {}
+impl Plain {
+    fn value(&self) -> i32 {
+        self.0
+    }
+}
 
 #[allow(dead_code)]
 /// Example Extension trait
@@ -359,17 +363,10 @@ impl CfgImplActor {
     }
 }
 
-/// A non-Clone actor reached through a view, whose `&self` methods change the
-/// state behind a lock.
+/// A non-Clone actor whose `&self` methods change the state behind a lock.
 #[derive(Debug)]
 struct InteriorMutabilityActor {
     value: Mutex<i32>,
-}
-
-impl ToView<i32> for InteriorMutabilityActor {
-    fn to_view(&self) -> i32 {
-        *self.value.lock().unwrap()
-    }
 }
 
 #[actify]
@@ -614,20 +611,6 @@ mod tests {
         assert_eq!(stored, "x-[1, 2]-3-true");
     }
 
-    /// An empty `#[actify]` block is how an actor asks for a handle carrying
-    /// the built-in calls and nothing else, which is the only way to make an
-    /// actor out of a type with no methods worth exposing.
-    #[tokio::test]
-    async fn test_an_empty_block_gives_a_handle_with_the_built_in_calls() {
-        let mut handle = PlainHandle::new(Plain(1));
-
-        assert_eq!(handle.get().await, Plain(1));
-
-        handle.set(Plain(2)).await;
-        assert_eq!(handle.get().await, Plain(2));
-        assert_eq!(handle.read_handle().get().await, Plain(2));
-    }
-
     /// An actor stops once the last handle to it goes out of scope, while one
     /// whose handle was cloned out of that scope keeps running.
     #[tokio::test]
@@ -658,16 +641,8 @@ mod tests {
         let mut parser = ParserHandle::new(Parser { store: None });
         let mut store = StoreHandle::new(Store { parser: None });
 
-        parser
-            .set(Parser {
-                store: Some(store.clone()),
-            })
-            .await;
-        store
-            .set(Store {
-                parser: Some(parser.clone()),
-            })
-            .await;
+        parser.set_store(store.clone()).await;
+        store.set_parser(parser.clone()).await;
 
         assert!(
             never_resolves(parser.parse()).await,
@@ -680,7 +655,7 @@ mod tests {
         let mut actor_handle = VecHandle::new(vec![1, 2, 3]);
 
         assert_eq!(actor_handle.drain(1..).await, vec![2, 3]);
-        assert_eq!(actor_handle.get().await, vec![1]);
+        assert_eq!(actor_handle.to_vec().await, vec![1]);
     }
 
     #[tokio::test]
@@ -704,20 +679,17 @@ mod tests {
         assert_eq!(handle.get_count().await, 2);
     }
 
-    /// A `&self` method behind interior mutability changes what a later read
-    /// sees, which is why the view is read from the actor rather than cloned
-    /// from it.
+    /// A `&self` method behind interior mutability changes what a later call
+    /// sees: the actor runs one call at a time on one value.
     #[tokio::test]
-    async fn test_interior_mutability_is_visible_through_the_view() {
-        let mut handle = InteriorMutabilityActorHandle::<i32>::new(InteriorMutabilityActor {
+    async fn test_interior_mutability_is_visible_to_later_calls() {
+        let mut handle = InteriorMutabilityActorHandle::new(InteriorMutabilityActor {
             value: Mutex::new(0),
         });
 
         assert_eq!(handle.peek().await, 0);
-        assert_eq!(handle.get().await, 0);
-
         assert_eq!(handle.increment().await, 1);
-        assert_eq!(handle.get().await, 1);
+        assert_eq!(handle.peek().await, 1);
     }
 
     /// Returns whether a future is still pending once nothing else can make
@@ -855,39 +827,6 @@ mod tests {
         drop(handle3);
         assert_eq!(await_alive_tasks(baseline).await, baseline);
     }
-
-    /// A ReadHandle holds a full handle internally, so it keeps the actor
-    /// alive after the last Handle is dropped. The crate docs state this;
-    /// the test keeps that statement true.
-    #[tokio::test]
-    async fn test_read_handle_keeps_actor_alive() {
-        let baseline = alive_tasks();
-
-        let handle = PlainHandle::new(Plain(1));
-        let mut read_handle = handle.read_handle();
-
-        let with_handle = await_alive_tasks(baseline + 1).await;
-        assert_eq!(with_handle, baseline + 1, "Expected one task for Handle");
-
-        drop(handle);
-
-        let after_handle_drop = settled_alive_tasks().await;
-        assert_eq!(
-            after_handle_drop,
-            baseline + 1,
-            "The actor should stay alive while a ReadHandle exists"
-        );
-
-        assert_eq!(read_handle.get().await, Plain(1));
-
-        drop(read_handle);
-
-        let after_read_drop = await_alive_tasks(baseline).await;
-        assert_eq!(
-            after_read_drop, baseline,
-            "The actor should stop once the last ReadHandle is dropped"
-        );
-    }
 }
 
 /// Two actors holding handles to each other, which is the shape that deadlocks.
@@ -912,6 +851,10 @@ impl Parser {
         self.store.clone().unwrap().save().await;
     }
 
+    fn set_store(&mut self, store: StoreHandle) {
+        self.store = Some(store);
+    }
+
     async fn is_ready(&self) -> bool {
         true
     }
@@ -921,5 +864,9 @@ impl Parser {
 impl Store {
     async fn save(&self) {
         self.parser.clone().unwrap().is_ready().await;
+    }
+
+    fn set_parser(&mut self, parser: ParserHandle) {
+        self.parser = Some(parser);
     }
 }

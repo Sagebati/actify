@@ -90,12 +90,47 @@ pub fn receiver(info: &ImplInfo) -> TokenStream {
 
 /// What the generated handle's sender parameter has to be.
 ///
-/// The async `JobSender` no longer requires `Clone`, but a handle is cloned by
-/// cloning its sender, so the handle asks for it here. The blocking one still
-/// carries `Clone` as a supertrait, and repeating it is harmless.
+/// An async handle sends through any [`Sink`] over its message type; a
+/// blocking one through the blocking `JobSender`. Both are cloned to clone
+/// the handle, so both ask for `Clone` here.
+///
+/// [`Sink`]: https://docs.rs/futures-sink/latest/futures_sink/trait.Sink.html
 pub fn sender_bound(info: &ImplInfo, call_ty: &TokenStream) -> TokenStream {
-    let root = root(info);
-    quote! { #root::JobSender<#call_ty> + ::std::clone::Clone }
+    match info.backend {
+        Backend::Async => quote! { ::actify::Sink<#call_ty> + Unpin + ::std::clone::Clone },
+        Backend::Blocking => {
+            quote! { ::actify::blocking::JobSender<#call_ty> + ::std::clone::Clone }
+        }
+    }
+}
+
+/// What the loop's receiver parameter has to be.
+///
+/// The async loop reads any [`Stream`] of its message type, and is spawned,
+/// so the stream has to travel with it. The blocking loop reads the blocking
+/// `JobReceiver`.
+///
+/// [`Stream`]: https://docs.rs/futures-core/latest/futures_core/trait.Stream.html
+pub fn receiver_bound(info: &ImplInfo, call_ty: &TokenStream) -> TokenStream {
+    match info.backend {
+        Backend::Async => {
+            quote! { ::actify::Stream<Item = #call_ty> + Unpin + Send + 'static }
+        }
+        Backend::Blocking => quote! { ::actify::blocking::JobReceiver<#call_ty> },
+    }
+}
+
+/// What the actor type has to be for this backend to serve it.
+///
+/// Both are moved to where they run, so both are `Send + 'static`. An async
+/// method borrows `&self` across an `await`, which puts `&T` in a future that
+/// has to be `Send`, so the async actor is `Sync` as well. A thread never
+/// holds such a borrow.
+pub fn actor_bound(info: &ImplInfo) -> TokenStream {
+    match info.backend {
+        Backend::Async => quote! { Send + Sync + 'static },
+        Backend::Blocking => quote! { Send + 'static },
+    }
 }
 
 /// The extra argument a blocking loop takes: how it waits for its next job.
@@ -109,7 +144,7 @@ pub fn wait_param(info: &ImplInfo) -> Option<TokenStream> {
 /// Takes the next job, however this backend waits for one.
 pub fn recv(info: &ImplInfo) -> TokenStream {
     match info.backend {
-        Backend::Async => quote! { ::actify::JobReceiver::recv(&mut __actify_rx).await },
+        Backend::Async => quote! { ::actify::__private::next(&mut __actify_rx).await },
         Backend::Blocking => {
             quote! { ::actify::blocking::__private::next(&mut __actify_rx, __actify_wait) }
         }

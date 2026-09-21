@@ -1,4 +1,7 @@
 //! Helpers shared by the generated message enum and the generated handle.
+//!
+//! `pub` here reaches exactly the sibling modules: `codegen` is private to the
+//! crate, so nothing outside it can name these.
 
 use crate::parse::ImplInfo;
 use quote::quote;
@@ -11,7 +14,7 @@ use quote::quote;
 /// The self type is used exactly as written, so `impl<T> Wrapper<Vec<T>>` calls
 /// `<Wrapper<Vec<T>>>::method`. Rebuilding it from the impl block's parameter
 /// list would instead produce `Wrapper::<T>`, which names a different type.
-pub(crate) fn build_call_prefix(info: &ImplInfo) -> proc_macro2::TokenStream {
+pub fn build_call_prefix(info: &ImplInfo) -> proc_macro2::TokenStream {
     let impl_type = &info.impl_type;
 
     match &info.trait_path {
@@ -21,7 +24,7 @@ pub(crate) fn build_call_prefix(info: &ImplInfo) -> proc_macro2::TokenStream {
 }
 
 /// Quote a return type, omitting the `->` for unit returns.
-pub(crate) fn quote_return_type(ty: &syn::Type) -> proc_macro2::TokenStream {
+pub fn quote_return_type(ty: &syn::Type) -> proc_macro2::TokenStream {
     match ty {
         syn::Type::Tuple(tuple) if tuple.elems.is_empty() => quote! {},
         _ => quote! { -> #ty },
@@ -32,7 +35,7 @@ pub(crate) fn quote_return_type(ty: &syn::Type) -> proc_macro2::TokenStream {
 ///
 /// `quote!` prints every token with a space around it, so `Fixed<N>` comes out
 /// as `Fixed < N >`. This closes the gaps a person would not leave.
-pub(crate) fn display_type(info: &ImplInfo) -> String {
+pub fn display_type(info: &ImplInfo) -> String {
     let impl_type = &info.impl_type;
     let spaced = quote! { #impl_type }.to_string();
     spaced

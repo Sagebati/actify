@@ -31,7 +31,7 @@ const PER_CALL: usize = 1;
 /// waits on it, so what is measured is a call and not a queue being drained.
 const SLOTS: usize = 64;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Counter(i32);
 
 #[actify(blocking)]
@@ -80,14 +80,9 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
         // is paid before any window opens.
         for _ in 0..50 {
             handle.add(1);
-            handle.get();
         }
 
         let case = |name: &str| format!("{wait:?} {name}");
-
-        // The built-in calls.
-        assert_allocations(measure(|| handle.get()), PER_CALL, &case("get"));
-        assert_allocations(measure(|| handle.set(Counter(0))), PER_CALL, &case("set"));
 
         // A plain generated method.
         assert_allocations(measure(|| handle.add(1)), PER_CALL, &case("add"));
@@ -109,14 +104,9 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
         let values = vec![3, 1, 2];
         assert_allocations(measure(|| handle.sorted(values)), PER_CALL, &case("sorted"));
 
-        // A read handle is the same path.
-        let reader = handle.read_handle();
-        assert_allocations(measure(|| reader.get()), PER_CALL, &case("ReadHandle::get"));
-
         // Handles share one channel through an `Arc`, so making another costs
         // a reference count and nothing on the heap.
         assert_allocations(measure(|| handle.clone()), 0, &case("Handle::clone"));
-        assert_allocations(measure(|| handle.read_handle()), 0, &case("read_handle"));
 
         // Not one call in isolation but every one of a run of them: over a
         // channel that has already allocated its queue there is nothing left
@@ -125,7 +115,6 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
         let counts = measure_each(200, || handle.add(1));
         assert_every_call(&counts, PER_CALL, &case("add over a preallocated channel"));
 
-        drop(reader);
         drop(handle);
         running.join().unwrap();
     }

@@ -1,7 +1,7 @@
-pub(crate) mod backend;
-pub(crate) mod call;
-pub(crate) mod handle;
-pub(crate) mod handle_struct;
+mod backend;
+mod call;
+mod handle;
+mod handle_struct;
 
 use crate::parse::ImplInfo;
 use quote::quote;

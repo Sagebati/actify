@@ -104,9 +104,9 @@ impl<M> Clone for CountingTx<M> {
 }
 
 impl<M: Send + 'static> JobSender<M> for CountingTx<M> {
-    fn send(&self, job: M) -> Result<(), actify::Closed> {
+    fn send(&self, job: M) -> Result<(), actify::blocking::Closed> {
         self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.0.send(job).map_err(|_| actify::Closed)
+        self.0.send(job).map_err(|_| actify::blocking::Closed)
     }
 }
 

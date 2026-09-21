@@ -39,7 +39,6 @@ where
 {
     /// Returns a clone of the value corresponding to the key if it exists
     /// It is equivalent to the Hashmap get(), but the method name is changed
-    /// to avoid conflicts with the get() method of the actor in general
     ///
     /// # Examples
     ///

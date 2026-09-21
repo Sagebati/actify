@@ -32,10 +32,9 @@ By generating the boilerplate code for you, a few key benefits are provided:
 - [Atomic](https://www.codingem.com/atomic-meaning-in-programming/) access and mutation of underlying data through clonable handles.
 - Typed arguments and return values on the methods from your actor, exposed through each handle.
 - No need to manually define message enums: the macro writes one, and a call is a variant of it.
-- Built-in `get()` and `set()` even without using the macro.
 - Methods that cannot be actified can stay in the impl block with `#[actify::skip]`.
 - Generic type parameters supported on the actor type.
-- Handles for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
+- Ready-made handles for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
 - A blocking backend, `#[actify(blocking)]`, for code with no executor to spare.
 
 ## Example
@@ -127,7 +126,7 @@ impl Counter {
 
 let mut handle = CounterHandle::new(Counter(0));
 assert_eq!(handle.add(2), 2);
-assert_eq!(handle.get(), Counter(2));
+assert_eq!(handle.add(3), 5);
 ```
 
 The channel is a blocking one (`std::sync::mpsc` by default, or anything that

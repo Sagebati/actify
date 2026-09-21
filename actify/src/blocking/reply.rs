@@ -21,7 +21,7 @@ use std::hint;
 use oneshot::TryRecvError;
 
 use super::Wait;
-use crate::channel::Closed;
+use super::channel::Closed;
 
 /// The half of a call's reply channel that the actor holds.
 ///
@@ -63,7 +63,7 @@ impl<R> Answer<R> {
     /// Reports [`Closed`] when the actor dropped its [`Reply`] without
     /// answering, which is what a stopped actor and a panicking method both
     /// look like from here.
-    pub(crate) fn recv(self, wait: Wait) -> Result<R, Closed> {
+    pub fn recv(self, wait: Wait) -> Result<R, Closed> {
         match wait {
             // Blocks the thread, costing nothing while it waits.
             Wait::Park => self.0.recv().map_err(|_| Closed),

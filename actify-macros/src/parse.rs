@@ -371,7 +371,7 @@ fn validate_method_generics(method: &ImplItemFn) -> syn::Result<()> {
 /// An actor method of the same name would be a second definition of it on the
 /// same type, which rustc reports as `E0592` pointing at the `#[actify]`
 /// attribute rather than at the method, with nothing to say why.
-const RESERVED_METHOD_NAMES: [&str; 5] = ["new", "builder", "get", "set", "read_handle"];
+const RESERVED_METHOD_NAMES: [&str; 2] = ["new", "builder"];
 
 /// Validate that the method's name is still free on the generated handle.
 ///

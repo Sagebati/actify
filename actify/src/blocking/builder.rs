@@ -4,23 +4,16 @@ use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::panic::Location;
 
-use super::Wait;
 use super::channel::{JobReceiver, JobSender};
-use super::handle::{DefaultReceiver, DefaultSender, Handle};
-use super::serve;
+use super::{DefaultReceiver, DefaultSender, Handle, Wait};
 use crate::actor::Actor;
-use crate::handles::ToView;
 
 /// Starts a builder for a blocking actor served with the message type `M`.
 ///
 /// Generated code calls this, which is the only way to build an actor.
 #[doc(hidden)]
 #[track_caller]
-pub fn builder<T, V, M>(val: T) -> HandleBuilder<T, V, M>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-{
+pub fn builder<T, M>(val: T) -> HandleBuilder<T, M> {
     HandleBuilder::new(val)
 }
 
@@ -31,14 +24,13 @@ where
 /// [`build`](HandleBuilder::build) to keep it.
 #[doc(hidden)]
 #[track_caller]
-pub fn spawn<T, V, M, F>(val: T, run: F) -> Handle<T, V, M>
+pub fn spawn<T, M, F>(val: T, run: F) -> Handle<T, M>
 where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    T: Send + 'static,
     M: Send + 'static,
     F: FnOnce(DefaultReceiver<M>, Actor<T>, Wait) + Send + 'static,
 {
-    let (handle, actor) = builder::<T, V, M>(val).build(run);
+    let (handle, actor) = builder(val).build(run);
     std::thread::spawn(actor);
     handle
 }
@@ -58,28 +50,29 @@ pub struct DefaultChannel;
 ///
 /// ```
 /// # use actify::actify;
-/// # #[derive(Clone, Debug, PartialEq)]
+/// # #[derive(Debug)]
 /// # struct Counter(i32);
 /// # #[actify(blocking)]
-/// # impl Counter {}
-/// let (mut handle, actor) = CounterHandle::builder(Counter(0)).build();
+/// # impl Counter {
+/// #     fn add(&mut self, value: i32) -> i32 { self.0 += value; self.0 }
+/// # }
+/// let (handle, actor) = CounterHandle::builder(Counter(0)).build();
 /// let running = std::thread::spawn(actor);
 ///
-/// handle.set(Counter(1));
-/// assert_eq!(handle.get(), Counter(1));
+/// assert_eq!(handle.add(1), 1);
 ///
 /// drop(handle);
 /// running.join().unwrap();
 /// ```
-pub struct HandleBuilder<T, V, M, C = DefaultChannel> {
+pub struct HandleBuilder<T, M, C = DefaultChannel> {
     val: T,
     spawned_at: &'static Location<'static>,
     channel: C,
     wait: Wait,
-    view: PhantomData<fn() -> (V, M)>,
+    message: PhantomData<fn() -> M>,
 }
 
-impl<T, V, M, C> Debug for HandleBuilder<T, V, M, C> {
+impl<T, M, C> Debug for HandleBuilder<T, M, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HandleBuilder")
             .field("spawned_at", &self.spawned_at)
@@ -88,7 +81,7 @@ impl<T, V, M, C> Debug for HandleBuilder<T, V, M, C> {
     }
 }
 
-impl<T, V, M, C> HandleBuilder<T, V, M, C> {
+impl<T, M, C> HandleBuilder<T, M, C> {
     /// Chooses how the actor waits for jobs and how a caller waits for replies.
     ///
     /// [`Wait::Park`] by default. See [the module docs](super#waiting) for what
@@ -98,20 +91,16 @@ impl<T, V, M, C> HandleBuilder<T, V, M, C> {
     }
 }
 
-impl<T, V, M> HandleBuilder<T, V, M, DefaultChannel>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-{
+impl<T, M> HandleBuilder<T, M, DefaultChannel> {
     /// Captures the call site so the actor's span names where it was built.
     #[track_caller]
-    pub(crate) fn new(val: T) -> Self {
+    fn new(val: T) -> Self {
         HandleBuilder {
             val,
             spawned_at: Location::caller(),
             channel: DefaultChannel,
             wait: Wait::Park,
-            view: PhantomData,
+            message: PhantomData,
         }
     }
 
@@ -125,7 +114,7 @@ where
     ///
     /// Whether a call waits to be queued is the channel's choice, so a bounded
     /// channel is how backpressure is asked for.
-    pub fn channel<S, R>(self, channel: (S, R)) -> HandleBuilder<T, V, M, (S, R)>
+    pub fn channel<S, R>(self, channel: (S, R)) -> HandleBuilder<T, M, (S, R)>
     where
         S: JobSender<M>,
         R: JobReceiver<M>,
@@ -135,7 +124,7 @@ where
             spawned_at: self.spawned_at,
             channel,
             wait: self.wait,
-            view: PhantomData,
+            message: PhantomData,
         }
     }
 
@@ -146,8 +135,9 @@ where
     /// until the caller puts it on a thread. Dropping it without doing so
     /// leaves a handle whose every call panics, reporting that the actor is not
     /// running.
-    pub fn build<F>(self, run: F) -> (Handle<T, V, M>, impl FnOnce() + Send + 'static)
+    pub fn build<F>(self, run: F) -> (Handle<T, M>, impl FnOnce() + Send + 'static)
     where
+        T: Send + 'static,
         M: Send + 'static,
         F: FnOnce(DefaultReceiver<M>, Actor<T>, Wait) + Send + 'static,
     {
@@ -156,17 +146,13 @@ where
     }
 }
 
-impl<T, V, M, S, R> HandleBuilder<T, V, M, (S, R)>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: JobSender<M>,
-    R: JobReceiver<M>,
-{
+impl<T, M, S, R> HandleBuilder<T, M, (S, R)> {
     /// Returns the handle and the closure that serves it, over the channel
     /// given to [`channel`](HandleBuilder::channel).
-    pub fn build<F>(self, run: F) -> (Handle<T, V, M, S>, impl FnOnce() + Send + 'static)
+    pub fn build<F>(self, run: F) -> (Handle<T, M, S>, impl FnOnce() + Send + 'static)
     where
+        T: Send + 'static,
+        R: Send + 'static,
         F: FnOnce(R, Actor<T>, Wait) + Send + 'static,
     {
         let (tx, rx) = self.channel;
@@ -175,32 +161,27 @@ where
             spawned_at: self.spawned_at,
             channel: DefaultChannel,
             wait: self.wait,
-            view: PhantomData,
+            message: PhantomData,
         }
         .with_channel(tx, rx, run)
     }
 }
 
-impl<T, V, M> HandleBuilder<T, V, M, DefaultChannel>
-where
-    T: ToView<V> + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-{
+impl<T, M> HandleBuilder<T, M, DefaultChannel> {
     fn with_channel<S, R, F>(
         self,
         tx: S,
         rx: R,
         run: F,
-    ) -> (Handle<T, V, M, S>, impl FnOnce() + Send + 'static)
+    ) -> (Handle<T, M, S>, impl FnOnce() + Send + 'static)
     where
-        S: JobSender<M>,
+        T: Send + 'static,
         R: Send + 'static,
         F: FnOnce(R, Actor<T>, Wait) + Send + 'static,
     {
-        let actor = Actor::new(self.val, self.spawned_at);
-        let wait = self.wait;
+        let (val, spawned_at, wait) = (self.val, self.spawned_at, self.wait);
         (Handle::from_sender(tx, wait), move || {
-            serve(rx, actor, wait, run)
+            Actor::serve_blocking(val, spawned_at, rx, wait, run)
         })
     }
 }

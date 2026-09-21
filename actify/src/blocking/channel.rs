@@ -1,18 +1,32 @@
 //! The job channel a blocking actor is served through.
 //!
-//! The async backend's [`JobSender`](crate::JobSender) and
-//! [`JobReceiver`](crate::JobReceiver) are blanket-implemented over [`Sink`]
-//! and [`Stream`], because those are the traits runtime-agnostic channel crates
-//! agree on. Blocking channels agree on no such trait, so these two are
-//! implemented for [`std::sync::mpsc`] here and left public for anything else:
-//! a crossbeam, flume or ring-buffer channel is a two-line implementation.
+//! An async actor's job channel is any [`Sink`] and [`Stream`], which are the
+//! traits runtime-agnostic channel crates agree on. Blocking channels agree on
+//! no such trait - std's own `Sender` and `SyncSender` share none - so these
+//! two are the smallest thing that spans them. They are implemented for
+//! [`std::sync::mpsc`] here and left public for anything else: a crossbeam,
+//! flume or ring-buffer channel is a two-line implementation.
 //!
-//! [`Sink`]: https://docs.rs/futures-sink/latest/futures_sink/trait.Sink.html
-//! [`Stream`]: https://docs.rs/futures-core/latest/futures_core/trait.Stream.html
+//! [`Sink`]: crate::Sink
+//! [`Stream`]: crate::Stream
 
+use std::fmt;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError};
 
-use crate::channel::Closed;
+/// The actor is gone: nothing is left to serve the call.
+///
+/// The sending half reports this once the actor's receiving half has been
+/// dropped, which happens when the actor's loop ends or is never started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Closed;
+
+impl fmt::Display for Closed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the actor is no longer serving jobs")
+    }
+}
+
+impl std::error::Error for Closed {}
 
 /// What a non-blocking look at the channel found.
 ///
@@ -34,7 +48,7 @@ pub enum Next<M> {
 /// channel's sender genuinely sends that way and parks the calling thread
 /// rather than a waker. There is nothing to clone and nothing to serialise, so
 /// a blocking handle stays shareable.
-pub trait JobSender<M>: Clone + Send + Sync + 'static {
+pub trait JobSender<M>: Send + Sync + 'static {
     /// Sends one job, waiting only if the channel applies backpressure.
     ///
     /// An unbounded channel never waits, which is what actify's own default is,

@@ -1,4 +1,4 @@
-error[E0599]: no method named `hidden` found for struct `MyActorHandle<__ActifyV, __ActifyS>` in the current scope
+error[E0599]: no method named `hidden` found for struct `MyActorHandle<__ActifyS>` in the current scope
   --> tests/compile_fail/skipped_method_not_on_handle.rs:27:20
    |
 10 | #[actify]

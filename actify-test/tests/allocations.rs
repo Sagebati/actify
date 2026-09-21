@@ -24,7 +24,7 @@ static GLOBAL: &StatsAlloc<System> = COUNTING;
 /// What a call costs: the reply channel, and the queue slot carrying it.
 const PER_CALL: usize = 2;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct Counter(i32);
 
 #[actify]
@@ -78,12 +78,7 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
         // registration - is paid before any window opens.
         for _ in 0..50 {
             handle.add(1).await;
-            handle.get().await;
         }
-
-        // The built-in calls.
-        assert_allocations(measure_async(handle.get()).await, PER_CALL, "get");
-        assert_allocations(measure_async(handle.set(Counter(0))).await, PER_CALL, "set");
 
         // A plain generated method.
         assert_allocations(measure_async(handle.add(1)).await, PER_CALL, "add");
@@ -119,14 +114,6 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
             "sorted",
         );
 
-        // A read handle is the same path.
-        let mut reader = handle.read_handle();
-        assert_allocations(
-            measure_async(reader.get()).await,
-            PER_CALL,
-            "ReadHandle::get",
-        );
-
         // A bounded channel costs the same two. It used to cost three: every
         // send cloned the sender, and cloning a bounded `futures_channel`
         // sender allocates an `Arc<Mutex<SenderTask>>` for the new sender's
@@ -148,6 +135,5 @@ fn a_call_allocates_only_the_reply_and_its_queue_slot() {
         // Handles share one channel through an `Arc`, so making another costs
         // a reference count and nothing on the heap.
         assert_allocations(measure(|| handle.clone()), 0, "Handle::clone");
-        assert_allocations(measure(|| handle.read_handle()), 0, "read_handle");
     });
 }

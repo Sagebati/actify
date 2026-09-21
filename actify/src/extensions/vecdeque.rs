@@ -5,6 +5,9 @@ use std::collections::VecDeque;
 /// An extension trait for `VecDeque<T>` actors, made available on the [`Handle`](crate::Handle)
 /// as [`VecDequeHandle`](crate::VecDequeHandle).
 trait ActorVecDeque<T> {
+    /// Copies the deque out of the actor, front to back.
+    fn to_vec(&self) -> Vec<T>;
+
     fn push_back(&mut self, value: T);
 
     fn push_front(&mut self, value: T);
@@ -55,6 +58,23 @@ impl<T> ActorVecDeque<T> for VecDeque<T>
 where
     T: Clone + Send + Sync + 'static,
 {
+    /// Copies the deque out of the actor, front to back.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use actify::VecDequeHandle;
+    /// # use std::collections::VecDeque;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2]));
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
+    /// # }
+    /// ```
+    fn to_vec(&self) -> Vec<T> {
+        self.iter().cloned().collect()
+    }
+
     /// Appends an element to the back of the deque.
     ///
     /// # Examples
@@ -67,7 +87,7 @@ where
     /// let mut handle = VecDequeHandle::new(VecDeque::new());
     /// handle.push_back(1).await;
     /// handle.push_back(2).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([1, 2]));
+    /// assert_eq!(handle.to_vec().await, vec![1, 2]);
     /// # }
     /// ```
     fn push_back(&mut self, value: T) {
@@ -86,7 +106,7 @@ where
     /// let mut handle = VecDequeHandle::new(VecDeque::new());
     /// handle.push_front(1).await;
     /// handle.push_front(2).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([2, 1]));
+    /// assert_eq!(handle.to_vec().await, vec![2, 1]);
     /// # }
     /// ```
     fn push_front(&mut self, value: T) {
@@ -180,7 +200,6 @@ where
     }
 
     /// Returns a clone of the element at the given index, or `None` if out of bounds.
-    /// Named `get_index` to avoid conflict with [`Handle::get`](crate::Handle::get).
     ///
     /// # Examples
     ///
@@ -270,7 +289,7 @@ where
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2, 3, 4]));
     /// let drained = handle.drain(1..3).await;
     /// assert_eq!(drained, vec![2, 3]);
-    /// assert_eq!(handle.get().await, VecDeque::from([1, 4]));
+    /// assert_eq!(handle.to_vec().await, vec![1, 4]);
     /// # }
     /// ```
     fn drain_bounds(&mut self, range: (Bound<usize>, Bound<usize>)) -> Vec<T> {
@@ -292,7 +311,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 3]));
     /// handle.insert(1, 2).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([1, 2, 3]));
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
     /// # }
     /// ```
     fn insert(&mut self, index: usize, value: T) {
@@ -312,7 +331,7 @@ where
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.remove(1).await, Some(2));
     /// assert_eq!(handle.remove(9).await, None);
-    /// assert_eq!(handle.get().await, VecDeque::from([1, 3]));
+    /// assert_eq!(handle.to_vec().await, vec![1, 3]);
     /// # }
     /// ```
     fn remove(&mut self, index: usize) -> Option<T> {
@@ -334,7 +353,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// handle.swap(0, 2).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([3, 2, 1]));
+    /// assert_eq!(handle.to_vec().await, vec![3, 2, 1]);
     /// # }
     /// ```
     fn swap(&mut self, i: usize, j: usize) {
@@ -352,7 +371,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// handle.truncate(1).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([1]));
+    /// assert_eq!(handle.to_vec().await, vec![1]);
     /// # }
     /// ```
     fn truncate(&mut self, len: usize) {
@@ -370,7 +389,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2]));
     /// handle.extend(VecDeque::from([3, 4])).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([1, 2, 3, 4]));
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 3, 4]);
     /// # }
     /// ```
     fn extend(&mut self, items: VecDeque<T>) {
@@ -393,7 +412,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.split_off(1).await, VecDeque::from([2, 3]));
-    /// assert_eq!(handle.get().await, VecDeque::from([1]));
+    /// assert_eq!(handle.to_vec().await, vec![1]);
     /// # }
     /// ```
     fn split_off(&mut self, at: usize) -> VecDeque<T> {
@@ -412,9 +431,9 @@ where
     /// # async fn main() {
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2]));
     /// handle.resize(4, 9).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([1, 2, 9, 9]));
+    /// assert_eq!(handle.to_vec().await, vec![1, 2, 9, 9]);
     /// handle.resize(1, 0).await;
-    /// assert_eq!(handle.get().await, VecDeque::from([1]));
+    /// assert_eq!(handle.to_vec().await, vec![1]);
     /// # }
     /// ```
     fn resize(&mut self, new_len: usize, value: T) {
@@ -424,12 +443,10 @@ where
 
 /// The range methods, written by hand so that a caller can still pass any
 /// range while the call itself carries a concrete pair of bounds.
-impl<T, V, S> VecDequeHandle<T, V, S>
+impl<T, S> VecDequeHandle<T, S>
 where
     T: Clone + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: actify::JobSender<VecDequeCall<T, V>> + Clone,
-    VecDeque<T>: actify::ToView<V> + Send + Sync + 'static,
+    S: actify::Sink<VecDequeCall<T>> + Unpin + Clone,
 {
     /// Removes the range from the deque and returns what it held.
     ///
@@ -442,7 +459,7 @@ where
     /// # async fn main() {
     /// let mut handle = VecDequeHandle::new(VecDeque::from([1, 2, 3]));
     /// assert_eq!(handle.drain(1..).await, vec![2, 3]);
-    /// assert_eq!(handle.get().await, VecDeque::from([1]));
+    /// assert_eq!(handle.to_vec().await, vec![1]);
     /// # }
     /// ```
     ///
@@ -472,11 +489,11 @@ mod tests {
 
         handle.push_front(0).await;
         handle.push_back(4).await;
-        assert_eq!(handle.get().await, VecDeque::from([0, 1, 2, 3, 4]));
+        assert_eq!(handle.to_vec().await, vec![0, 1, 2, 3, 4]);
 
         assert_eq!(handle.pop_front().await, Some(0));
         assert_eq!(handle.pop_back().await, Some(4));
-        assert_eq!(handle.get().await, VecDeque::from([1, 2, 3]));
+        assert_eq!(handle.to_vec().await, vec![1, 2, 3]);
 
         handle.clear().await;
         assert!(handle.is_empty().await);
@@ -502,13 +519,13 @@ mod tests {
         let mut handle = deque();
 
         handle.insert(1, 9).await;
-        assert_eq!(handle.get().await, VecDeque::from([1, 9, 2, 3]));
+        assert_eq!(handle.to_vec().await, vec![1, 9, 2, 3]);
 
         assert_eq!(handle.remove(2).await, Some(2));
-        assert_eq!(handle.get().await, VecDeque::from([1, 9, 3]));
+        assert_eq!(handle.to_vec().await, vec![1, 9, 3]);
 
         handle.swap(0, 1).await;
-        assert_eq!(handle.get().await, VecDeque::from([9, 1, 3]));
+        assert_eq!(handle.to_vec().await, vec![9, 1, 3]);
 
         assert_eq!(handle.remove(9).await, None);
     }
@@ -518,7 +535,7 @@ mod tests {
         let mut handle = deque();
 
         assert_eq!(handle.drain(1..3).await, vec![2, 3]);
-        assert_eq!(handle.get().await, VecDeque::from([1]));
+        assert_eq!(handle.to_vec().await, vec![1]);
     }
 
     #[tokio::test]
@@ -526,13 +543,13 @@ mod tests {
         let mut handle = deque();
 
         handle.extend(VecDeque::from([4, 5])).await;
-        assert_eq!(handle.get().await, VecDeque::from([1, 2, 3, 4, 5]));
+        assert_eq!(handle.to_vec().await, vec![1, 2, 3, 4, 5]);
 
         assert_eq!(handle.split_off(2).await, VecDeque::from([3, 4, 5]));
-        assert_eq!(handle.get().await, VecDeque::from([1, 2]));
+        assert_eq!(handle.to_vec().await, vec![1, 2]);
 
         handle.truncate(1).await;
-        assert_eq!(handle.get().await, VecDeque::from([1]));
+        assert_eq!(handle.to_vec().await, vec![1]);
     }
 
     #[tokio::test]
@@ -540,9 +557,9 @@ mod tests {
         let mut handle = deque();
 
         handle.resize(5, 9).await;
-        assert_eq!(handle.get().await, VecDeque::from([1, 2, 3, 9, 9]));
+        assert_eq!(handle.to_vec().await, vec![1, 2, 3, 9, 9]);
 
         handle.resize(2, 0).await;
-        assert_eq!(handle.get().await, VecDeque::from([1, 2]));
+        assert_eq!(handle.to_vec().await, vec![1, 2]);
     }
 }
