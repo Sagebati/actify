@@ -4,6 +4,7 @@
 //! the caller's reply channel, so nothing on the way to the actor is boxed or
 //! downcast.
 
+use super::backend;
 use crate::parse::{ImplInfo, MethodInfo};
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -172,6 +173,11 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     with_view.params.push(syn::parse_quote!(#view));
     let (impl_generics, _, _) = with_view.split_for_impl();
 
+    let root = backend::root(info);
+    let asyncness = backend::asyncness(info);
+    let wait_param = backend::wait_param(info);
+    let recv = backend::recv(info);
+
     // The loop is a free function rather than a method, so nothing the actor
     // type declares has to be a trait implementation.
     let mut run_generics = info.generics.clone();
@@ -180,7 +186,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         .push(syn::parse_quote!(#view: Send + 'static));
     run_generics
         .params
-        .push(syn::parse_quote!(__ActifyRx: ::actify::JobReceiver<#call_ty>));
+        .push(syn::parse_quote!(__ActifyRx: #root::JobReceiver<#call_ty>));
     run_generics
         .make_where_clause()
         .predicates
@@ -204,7 +210,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
             #variant {
                 #(#arg_names: #arg_types,)*
                 #thunk
-                __actify_reply: ::actify::__private::Reply<#output>,
+                __actify_reply: #root::__private::Reply<#output>,
             },
         }
     });
@@ -259,15 +265,15 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         #[allow(non_camel_case_types)]
         pub enum #call<#(#declared,)* #view = #impl_type> {
             /// One of the calls every handle has, whatever its actor declares.
-            __ActifyBuiltin(::actify::Builtin<#impl_type, #view>),
+            __ActifyBuiltin(#root::Builtin<#impl_type, #view>),
             #(#variants)*
         }
 
         #(#attrs)*
-        impl #impl_generics ::std::convert::From<::actify::Builtin<#impl_type, #view>>
+        impl #impl_generics ::std::convert::From<#root::Builtin<#impl_type, #view>>
             for #call_ty #where_clause
         {
-            fn from(__actify_builtin: ::actify::Builtin<#impl_type, #view>) -> Self {
+            fn from(__actify_builtin: #root::Builtin<#impl_type, #view>) -> Self {
                 #call::__ActifyBuiltin(__actify_builtin)
             }
         }
@@ -289,16 +295,15 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         // site, which the handle's method carries it to.
         #[allow(deprecated)]
         #[doc(hidden)]
-        pub async fn #run_ident #run_generics_impl(
+        pub #asyncness fn #run_ident #run_generics_impl(
             mut __actify_rx: __ActifyRx,
-            mut __actify_actor: ::actify::__private::Actor<#impl_type>,
+            mut __actify_actor: #root::__private::Actor<#impl_type>,
+            #wait_param
         ) #run_where {
-            while let Some(__actify_call) =
-                ::actify::JobReceiver::recv(&mut __actify_rx).await
-            {
+            while let Some(__actify_call) = #recv {
                 match __actify_call {
                     #call::__ActifyBuiltin(__actify_builtin) => {
-                        ::actify::__private::run_builtin(&mut __actify_actor, __actify_builtin)
+                        #root::__private::run_builtin(&mut __actify_actor, __actify_builtin)
                     }
                     #(#arms)*
                 }

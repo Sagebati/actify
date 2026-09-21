@@ -4,7 +4,7 @@ Actify is a pre-1.0 crate used in production. The API may still change between m
 
 Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) for any struct. Just add `#[actify]` to an `impl` block and call your methods through a clonable handle of the actor's own.
 
-Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies. A call travels to it as a variant of a generated message enum, carrying its arguments and the caller's reply channel, so nothing on the way is boxed.
+Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies. A call travels to it as a variant of a generated message enum, carrying its arguments and the caller's reply channel, so nothing on the way is boxed. With `#[actify(blocking)]` there is no runtime at all: the actor is a loop on a `std::thread` and the handle's methods are ordinary blocking calls.
 
 [![Crates.io][crates-badge]][crates-url]
 [![License][mit-badge]][mit-url]
@@ -36,6 +36,7 @@ By generating the boilerplate code for you, a few key benefits are provided:
 - Methods that cannot be actified can stay in the impl block with `#[actify::skip]`.
 - Generic type parameters supported on the actor type.
 - Handles for common types: `Vec`, `VecDeque`, `String`, `Option`, `HashMap`, `HashSet`.
+- A blocking backend, `#[actify(blocking)]`, for code with no executor to spare.
 
 ## Example
 
@@ -95,6 +96,39 @@ bounded channel is how backpressure is asked for instead.
 
 See `examples/spawn_it_yourself.rs` for an actor served without Tokio anywhere
 in the graph.
+
+## No runtime at all
+
+`#[actify(blocking)]` generates the same message enum, handle and builder with
+`async` taken out of all three. The actor's loop is a plain `fn` that a
+`std::thread` runs, and the handle's methods block until it answers:
+
+```rust
+use actify::actify;
+
+#[derive(Clone, std::fmt::Debug, PartialEq)]
+struct Counter(i32);
+
+#[actify(blocking)]
+impl Counter {
+    fn add(&mut self, value: i32) -> i32 {
+        self.0 += value;
+        self.0
+    }
+}
+
+let handle = CounterHandle::new(Counter(0));
+assert_eq!(handle.add(2), 2);
+assert_eq!(handle.get(), Counter(2));
+```
+
+The channel is a blocking one (`std::sync::mpsc` by default, or anything that
+implements the two public traits), and `Wait` chooses whether the actor and its
+callers park or busy-wait. A call costs the same two allocations as an async
+one. An `async fn` in such a block is a compile error, since nothing is there to
+drive it.
+
+See `examples/no_runtime_at_all.rs` for a program that uses nothing else.
 
 For full API documentation, see [docs.rs](https://docs.rs/actify/latest/actify/).
 

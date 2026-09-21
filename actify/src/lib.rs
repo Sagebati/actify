@@ -11,7 +11,8 @@
 //!
 //! By generating the boilerplate code for you, a few key benefits are provided:
 //!
-//! * Async actor model over any channel, on any executor
+//! * Async actor model over any channel, on any executor - or a blocking one
+//!   on a thread, with `#[actify(blocking)]` and no runtime at all
 //! * Access to actors through clonable, generated handles
 //! * Typed arguments on the methods from your actor, exposed through the handle
 //! * No need to define message enums: the macro writes one, and a call travels
@@ -295,6 +296,46 @@
 //! [`Sink`]: https://docs.rs/futures-sink/latest/futures_sink/trait.Sink.html
 //! [`Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
 //!
+//! # Actors without a runtime
+//!
+//! `#[actify(blocking)]` generates the same three things with `async` taken out
+//! of all of them: the actor's loop is a plain `fn` that a [`std::thread`] runs,
+//! and the handle's methods are ordinary calls that return when the actor has
+//! answered. There is no executor anywhere, which is what makes it usable from
+//! a plain `fn main`, a real-time thread, or a binary that has no runtime to
+//! spare.
+//!
+//! ```
+//! use actify::actify;
+//!
+//! #[derive(Clone, Debug, PartialEq)]
+//! struct Counter(i32);
+//!
+//! #[actify(blocking)]
+//! impl Counter {
+//!     fn add(&mut self, value: i32) -> i32 {
+//!         self.0 += value;
+//!         self.0
+//!     }
+//! }
+//!
+//! let handle = CounterHandle::new(Counter(0));
+//! assert_eq!(handle.add(2), 2);
+//! assert_eq!(handle.get(), Counter(2));
+//! ```
+//!
+//! Everything else is as it is above: the same generated message enum, the same
+//! handle and builder, the same `get`, `set` and [`ReadHandle`], the same
+//! `#[skip]`, the same two allocations per call, and the same rule that the
+//! actor stops when its last handle is dropped. What differs is that `build`
+//! hands back a closure rather than a future, that the channel is a blocking
+//! one, and that [`Wait`](blocking::Wait) chooses whether the two threads park
+//! or busy-wait. An `async fn` in such a block is a compile error, since there
+//! is no runtime to drive it.
+//!
+//! See the [`blocking`] module for the details, and
+//! `examples/no_runtime_at_all.rs` for a program that uses nothing else.
+//!
 //! # Standard methods
 //!
 //! Every generated handle provides these, whatever methods its actor declares:
@@ -507,6 +548,7 @@ mod readme {
 extern crate self as actify;
 
 mod actor;
+pub mod blocking;
 mod channel;
 mod extensions;
 mod handles;

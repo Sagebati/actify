@@ -63,13 +63,40 @@ pub fn reply<R>() -> (Reply<R>, oneshot::Receiver<R>) {
     (Reply(respond_to), get_result)
 }
 
+/// The actor's half of a call's reply channel, whichever backend made it.
+///
+/// Both backends answer a call the same way and log the same line when nobody
+/// is left to hear it, so [`Actor::respond`] is one function over this trait
+/// rather than one function per backend. The async backend's reply is a
+/// [`futures_channel::oneshot`] sender; the blocking one's is a parked slot.
+///
+/// Not part of the public API: it names the two reply types, and nothing else
+/// can implement it.
+#[doc(hidden)]
+pub trait Answerable<R>: sealed::Sealed {
+    /// Hands the value to the caller, reporting whether anyone was left.
+    fn answer(self, value: R) -> Result<(), ()>;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl<R> Sealed for super::Reply<R> {}
+    impl<R> Sealed for crate::blocking::reply::Reply<R> {}
+}
+
+impl<R> Answerable<R> for Reply<R> {
+    fn answer(self, value: R) -> Result<(), ()> {
+        self.0.send(value).map_err(|_| ())
+    }
+}
+
 impl<T> Actor<T> {
     /// Answers one call.
     ///
     /// The caller is gone whenever it dropped the call before the actor got to
     /// it, which is worth a line because it means the work was wasted.
-    pub fn respond<R>(&self, reply: Reply<R>, value: R) {
-        if reply.0.send(value).is_err() {
+    pub fn respond<R, A: Answerable<R>>(&self, reply: A, value: R) {
+        if reply.answer(value).is_err() {
             tracing::debug!(
                 actor_type = type_name::<T>(),
                 actor_id = self.id,
@@ -95,7 +122,7 @@ enum ActorExit {
 /// `std::thread::panicking()` is true while a panic unwinds the task, which is
 /// what separates a panicking actor method from a runtime shutdown or a
 /// cancelled task - both of which drop the task without unwinding.
-struct ExitGuard {
+pub(crate) struct ExitGuard {
     actor_type: &'static str,
     actor_id: u64,
 }
@@ -161,7 +188,10 @@ where
 
 impl<T: Send + Sync + 'static> Actor<T> {
     /// The span every call on this actor runs inside.
-    fn span(&self) -> tracing::Span {
+    ///
+    /// `pub(crate)` because the blocking backend enters it around its loop
+    /// where the async one instruments a future with it.
+    pub(crate) fn span(&self) -> tracing::Span {
         tracing::info_span!(
             "actor",
             actor_type = type_name::<T>(),
@@ -170,8 +200,8 @@ impl<T: Send + Sync + 'static> Actor<T> {
         )
     }
 
-    /// Reports why the actor stopped, whenever the loop's future is dropped.
-    fn exit_guard(&self) -> ExitGuard {
+    /// Reports why the actor stopped, whenever the loop ends or unwinds.
+    pub(crate) fn exit_guard(&self) -> ExitGuard {
         ExitGuard {
             actor_type: type_name::<T>(),
             actor_id: self.id,

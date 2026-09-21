@@ -14,6 +14,30 @@ everything that could only be built on one runtime's channels and timers. It
 also stops sending closures to actors: a call now travels as data, which is
 what makes the channel agnostic in more than name. It is breaking throughout.
 
+### Added
+
+- A blocking backend: `#[actify(blocking)]`.
+
+  The actor runs on a `std::thread` rather than on an executor, and the
+  generated handle's methods are ordinary synchronous `fn` that block until the
+  actor answers. `build` hands back a closure instead of a future, the channel
+  is a blocking one (`std::sync::mpsc` by default, and `blocking::JobSender`
+  and `blocking::JobReceiver` are public so any other will do), and
+  `blocking::Wait` chooses whether the actor's thread and its callers park or
+  busy-wait with `spin_loop`.
+
+  Everything else is the same generated code: the same message enum, the same
+  `get`, `set`, `read_handle` and `#[skip]`, the same `actor` span and exit
+  events, the same panic contract, and the same two allocations per call. The
+  reply channel is a one-`Arc` slot in place of the futures oneshot, since a
+  thread cannot wait on a future.
+
+  An `async fn` in a blocking block is a compile error: there is no runtime to
+  drive it.
+
+  `Actor::respond` is now generic over which reply channel it answers, which is
+  what lets both backends share one `Actor`, one span and one exit guard.
+
 ### Changed
 
 - A call travels to its actor as data, not as a boxed closure.

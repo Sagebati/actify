@@ -1,0 +1,5 @@
+error: An async method cannot be actified in a #[actify(blocking)] block: the actor runs on a thread with no executor to drive the future (make the method synchronous, or use #[actify] and spawn the actor on a runtime)
+  --> tests/compile_fail/async_method_in_blocking_block.rs:10:5
+   |
+10 |     async fn fetch(&self) -> i32 {
+   |     ^^^^^

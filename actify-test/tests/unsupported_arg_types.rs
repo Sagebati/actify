@@ -41,6 +41,7 @@ fn compile_fail_tests() {
     t.compile_fail("tests/compile_fail/method_generic.rs");
     t.compile_fail("tests/compile_fail/method_const_generic.rs");
     t.compile_fail("tests/compile_fail/async_method_where_clause.rs");
+    t.compile_fail("tests/compile_fail/async_method_in_blocking_block.rs");
     t.compile_fail("tests/compile_fail/by_value_self.rs");
 
     // Skipped methods

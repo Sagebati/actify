@@ -33,11 +33,16 @@ pub fn skip(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Parsed arguments from `#[actify(...)]`.
 struct ActifyArgs {
     custom_name: Option<syn::LitStr>,
+    /// `#[actify(blocking)]`: the actor runs on a thread, not on a future.
+    blocking: bool,
 }
 
 impl syn::parse::Parse for ActifyArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let mut args = ActifyArgs { custom_name: None };
+        let mut args = ActifyArgs {
+            custom_name: None,
+            blocking: false,
+        };
 
         while !input.is_empty() {
             let ident: syn::Ident = input.parse()?;
@@ -45,10 +50,12 @@ impl syn::parse::Parse for ActifyArgs {
                 input.parse::<syn::Token![=]>()?;
                 let name: syn::LitStr = input.parse()?;
                 args.custom_name = Some(name);
+            } else if ident == "blocking" {
+                args.blocking = true;
             } else {
                 return Err(syn::Error::new_spanned(
                     ident,
-                    "unknown actify attribute; expected `name = \"...\"`",
+                    "unknown actify attribute; expected `blocking` or `name = \"...\"`",
                 ));
             }
 
@@ -82,6 +89,14 @@ fn report(error: syn::Error, impl_block: &syn::ItemImpl) -> TokenStream {
 /// methods mirror the block's and send those variants, and a builder for it.
 /// Arguments and return values keep their types the whole way, so a call is
 /// checked as if it were a direct one.
+///
+/// # `#[actify(blocking)]`
+///
+/// Generates the same three things without `async`: the actor's loop is a
+/// plain `fn` that a [`std::thread`] runs, and the handle's methods block until
+/// the actor answers. An `async fn` in such a block is an error, since there is
+/// no runtime to drive it. See the `blocking` module for what a caller chooses
+/// between parking and busy-waiting.
 #[proc_macro_attribute]
 pub fn actify(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = syn::parse_macro_input!(item as syn::ItemImpl);
@@ -91,7 +106,13 @@ pub fn actify(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(error) => return report(error, &impl_block),
     };
 
-    match parse::ImplInfo::from_impl_block(&mut impl_block, args.custom_name) {
+    let backend = if args.blocking {
+        parse::Backend::Blocking
+    } else {
+        parse::Backend::Async
+    };
+
+    match parse::ImplInfo::from_impl_block(&mut impl_block, args.custom_name, backend) {
         Ok(info) => codegen::generate(&info).into(),
         Err(error) => report(error, &impl_block),
     }

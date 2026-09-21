@@ -13,8 +13,23 @@ fn accumulate(errors: &mut Option<Error>, error: Error) {
     }
 }
 
+/// Which of the two actors an impl block asked for.
+///
+/// The difference is narrow enough that one codegen path emits both: a handful
+/// of tokens, which `codegen::backend` lists, plus the rule below that a
+/// blocking actor has no runtime to drive an `async fn` with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    /// `#[actify]`: the actor is a future, spawned on an executor.
+    Async,
+    /// `#[actify(blocking)]`: the actor is a loop, running on a thread.
+    Blocking,
+}
+
 /// Intermediate representation for an entire impl block processed by `#[actify]`.
 pub struct ImplInfo {
+    /// Whether this block asked for a blocking actor.
+    pub backend: Backend,
     /// The full impl type, e.g. `TestStruct<T>`.
     pub impl_type: Box<Type>,
     /// Generated handle name, e.g. `TestStructHandle`.
@@ -39,6 +54,7 @@ impl ImplInfo {
     pub fn from_impl_block(
         impl_block: &mut ItemImpl,
         custom_name: Option<syn::LitStr>,
+        backend: Backend,
     ) -> syn::Result<ImplInfo> {
         let type_ident = get_impl_type_ident(&impl_block.self_ty)?;
 
@@ -83,7 +99,7 @@ impl ImplInfo {
                 continue;
             }
 
-            match MethodInfo::from_impl_method(method) {
+            match MethodInfo::from_impl_method(method, backend) {
                 Ok(info) => methods.push(info),
                 Err(error) => accumulate(&mut errors, error),
             }
@@ -94,6 +110,7 @@ impl ImplInfo {
         }
 
         Ok(ImplInfo {
+            backend,
             impl_type: impl_block.self_ty.clone(),
             handle_trait_ident,
             call_enum_ident,
@@ -128,7 +145,7 @@ pub struct MethodInfo {
 
 impl MethodInfo {
     /// Parse a single `ImplItemFn` into its intermediate representation.
-    fn from_impl_method(method: &ImplItemFn) -> syn::Result<MethodInfo> {
+    fn from_impl_method(method: &ImplItemFn, backend: Backend) -> syn::Result<MethodInfo> {
         let ident = method.sig.ident.clone();
 
         let is_mutable = method.sig.inputs.iter().any(|arg| {
@@ -149,6 +166,10 @@ impl MethodInfo {
         }
 
         if let Err(error) = validate_method_generics(method) {
+            accumulate(&mut errors, error);
+        }
+
+        if let Err(error) = validate_asyncness(method, backend) {
             accumulate(&mut errors, error);
         }
 
@@ -336,6 +357,25 @@ fn validate_method_generics(method: &ImplItemFn) -> syn::Result<()> {
             method.sig.generics.where_clause.as_ref().unwrap(),
             "An async actor method cannot carry a where clause of its own: the call would have to reach it through a function pointer, and one to an async method returns a future the message cannot hold",
         ));
+    }
+
+    Ok(())
+}
+
+/// Validate that the backend can run a method of this kind.
+///
+/// A blocking actor is a loop on a thread with no executor anywhere near it,
+/// so there is nothing to drive the future an `async fn` returns. Blocking on
+/// it would mean picking a runtime for the caller, which is the dependency the
+/// blocking backend exists to avoid.
+fn validate_asyncness(method: &ImplItemFn, backend: Backend) -> syn::Result<()> {
+    if backend == Backend::Blocking {
+        if let Some(asyncness) = method.sig.asyncness {
+            return Err(Error::new(
+                asyncness.span,
+                "An async method cannot be actified in a #[actify(blocking)] block: the actor runs on a thread with no executor to drive the future (make the method synchronous, or use #[actify] and spawn the actor on a runtime)",
+            ));
+        }
     }
 
     Ok(())

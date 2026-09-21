@@ -9,6 +9,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::Ident;
 
+use super::backend;
 use super::call::{
     Carrier, call_type, carrier, declared_params, param_names, run_ident, variant_ident,
 };
@@ -32,11 +33,14 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     let view = view();
     let sender = sender();
     let call_ty = call_type(info, &view);
+    let root = backend::root(info);
+    let asyncness = backend::asyncness(info);
+    let awaiter = backend::awaiter(info);
 
     let declared = declared_params(info);
     let names = param_names(info);
     let handle_ty = quote! { #handle<#(#names,)* #view, #sender> };
-    let inner = quote! { ::actify::Handle<#impl_type, #view, #call_ty, #sender> };
+    let inner = quote! { #root::Handle<#impl_type, #view, #call_ty, #sender> };
 
     // Naming the type takes the parameters alone; only the impls carry bounds.
     let mut bare = info.generics.clone();
@@ -50,7 +54,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     full.params
         .push(syn::parse_quote!(#view: ::std::clone::Clone + Send + Sync + 'static));
     full.params
-        .push(syn::parse_quote!(#sender: ::actify::JobSender<#call_ty>));
+        .push(syn::parse_quote!(#sender: #root::JobSender<#call_ty>));
     full.make_where_clause()
         .predicates
         .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
@@ -65,7 +69,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
         .predicates
         .push(syn::parse_quote!(#impl_type: ::actify::ToView<#view> + Send + Sync + 'static));
     let (made_generics, _, made_where) = made.split_for_impl();
-    let made_ty = quote! { #handle<#(#names,)* #view, ::actify::DefaultSender<#call_ty>> };
+    let made_ty = quote! { #handle<#(#names,)* #view, #root::DefaultSender<#call_ty>> };
 
     let constructors = constructors(info);
     let builder = generate_builder(info);
@@ -83,7 +87,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     quote! {
         #[doc = #doc]
         #(#attrs)*
-        pub struct #handle <#(#declared,)* #view = #impl_type, #sender = ::actify::DefaultSender<#call_ty>>(
+        pub struct #handle <#(#declared,)* #view = #impl_type, #sender = #root::DefaultSender<#call_ty>>(
             #inner
         );
 
@@ -136,8 +140,8 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
             /// # Panics
             ///
             /// Panics if the actor has stopped.
-            pub async fn get(&self) -> #view {
-                self.0.get().await
+            pub #asyncness fn get(&self) -> #view {
+                self.0.get() #awaiter
             }
 
             /// Overwrites the actor's value.
@@ -145,14 +149,14 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
             /// # Panics
             ///
             /// Panics if the actor has stopped.
-            pub async fn set(&self, __actify_val: #impl_type) {
-                self.0.set(__actify_val).await
+            pub #asyncness fn set(&self, __actify_val: #impl_type) {
+                self.0.set(__actify_val) #awaiter
             }
 
             /// Returns a read-only handle to the same actor.
             pub fn read_handle(
                 &self,
-            ) -> ::actify::ReadHandle<#impl_type, #view, #call_ty, #sender> {
+            ) -> #root::ReadHandle<#impl_type, #view, #call_ty, #sender> {
                 self.0.read_handle()
             }
 
@@ -168,37 +172,45 @@ fn constructors(info: &ImplInfo) -> TokenStream {
     let handle = &info.handle_trait_ident;
     let impl_type = &info.impl_type;
     let view = view();
+    let root = backend::root(info);
 
     let run = run_ident(info);
 
-    // `Handle::new` exists only where actify can spawn, so this does too:
-    // actify turns the macro's `tokio` feature on with its own.
-    let new = cfg!(feature = "tokio").then(|| {
+    // `new` spawns, so it exists only where this backend can: a thread always,
+    // Tokio only where actify has it, which actify says with its own feature.
+    let new_doc = backend::new_doc(info);
+    let new = backend::can_spawn(info).then(|| {
         quote! {
-            /// Builds the actor, spawns it on Tokio and returns its handle.
-            ///
-            /// The spelling of [`builder`](Self::builder) followed by a
-            /// `tokio::spawn`. Turn actify's `tokio` feature off and the caller
-            /// spawns the actor future instead.
+            #[doc = #new_doc]
             #[track_caller]
             pub fn new(__actify_val: #impl_type) -> Self {
-                #handle(::actify::__private::spawn(__actify_val, #run))
+                #handle(#root::__private::spawn(__actify_val, #run))
             }
         }
     });
 
     let builder = builder_ident(info);
     let names = param_names(info);
+    let builder_doc = match info.backend {
+        crate::parse::Backend::Async => {
+            " Starts building a handle whose actor future the caller spawns.\n\n\
+             `build` hands back this handle and that future, so the caller\n\
+             chooses the executor."
+        }
+        crate::parse::Backend::Blocking => {
+            " Starts building a handle whose actor the caller runs.\n\n\
+             `build` hands back this handle and a closure, so the caller\n\
+             chooses the thread and keeps its `JoinHandle`. It is also where\n\
+             `wait` chooses between parking and busy-waiting."
+        }
+    };
     quote! {
         #new
 
-        /// Starts building a handle whose actor future the caller spawns.
-        ///
-        /// `build` hands back this handle and that future, so the caller
-        /// chooses the executor.
+        #[doc = #builder_doc]
         #[track_caller]
         pub fn builder(__actify_val: #impl_type) -> #builder<#(#names,)* #view> {
-            #builder(::actify::__private::builder(__actify_val))
+            #builder(#root::__private::builder(__actify_val))
         }
     }
 }
@@ -219,6 +231,8 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
     let impl_type = &info.impl_type;
     let view = view();
     let call_ty = call_type(info, &view);
+    let root = backend::root(info);
+    let actor_type = backend::actor_type(info);
 
     let declared = declared_params(info);
     let names = param_names(info);
@@ -236,15 +250,15 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
 
     let default_channel = common.clone();
     let (default_generics, _, default_where) = default_channel.split_for_impl();
-    let default_ty = quote! { #builder<#(#names,)* #view, ::actify::DefaultChannel> };
+    let default_ty = quote! { #builder<#(#names,)* #view, #root::DefaultChannel> };
 
     let mut own_channel = common.clone();
     own_channel
         .params
-        .push(syn::parse_quote!(__ActifyTx: ::actify::JobSender<#call_ty>));
+        .push(syn::parse_quote!(__ActifyTx: #root::JobSender<#call_ty>));
     own_channel
         .params
-        .push(syn::parse_quote!(__ActifyRx: ::actify::JobReceiver<#call_ty>));
+        .push(syn::parse_quote!(__ActifyRx: #root::JobReceiver<#call_ty>));
     let (own_generics, _, own_where) = own_channel.split_for_impl();
     let own_ty = quote! { #builder<#(#names,)* #view, (__ActifyTx, __ActifyRx)> };
 
@@ -252,12 +266,29 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
     bare.params.push(syn::parse_quote!(#view));
     bare.params.push(syn::parse_quote!(#channel));
     let (bare_generics, _, _) = bare.split_for_impl();
+    let bare_generics_tokens = quote! { #bare_generics };
 
     let doc = format!(
-        "Builds a handle to a `{}` actor, and the future that serves it.",
+        "Builds a handle to a `{}` actor, and the {} that serves it.",
         quote! { #impl_type },
+        match info.backend {
+            crate::parse::Backend::Async => "future",
+            crate::parse::Backend::Blocking => "closure",
+        },
     );
     let debug_name = builder.to_string();
+    let wait = wait_method(info, &bare_generics_tokens, &builder_ty);
+    let build_doc = match info.backend {
+        crate::parse::Backend::Async => {
+            " Returns the handle and the future that serves it.\n\n\
+             Nothing runs until the caller polls that future."
+        }
+        crate::parse::Backend::Blocking => {
+            " Returns the handle and the closure that serves it.\n\n\
+             Nothing runs until the caller calls it, which is usually a\n\
+             `std::thread::spawn`."
+        }
+    };
 
     quote! {
         #[doc = #doc]
@@ -265,8 +296,8 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
         pub struct #builder<
             #(#declared,)*
             #view = #impl_type,
-            #channel = ::actify::DefaultChannel,
-        >(::actify::HandleBuilder<#impl_type, #view, #call_ty, #channel>);
+            #channel = #root::DefaultChannel,
+        >(#root::HandleBuilder<#impl_type, #view, #call_ty, #channel>);
 
         #(#attrs)*
         impl #bare_generics ::std::fmt::Debug for #builder_ty {
@@ -274,6 +305,8 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
                 ::std::write!(__actify_f, "{}", #debug_name)
             }
         }
+
+        #wait
 
         #(#attrs)*
         impl #default_generics #default_ty #default_where {
@@ -286,20 +319,18 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
                 __actify_channel: (__ActifyTx, __ActifyRx),
             ) -> #builder<#(#names,)* #view, (__ActifyTx, __ActifyRx)>
             where
-                __ActifyTx: ::actify::JobSender<#call_ty>,
-                __ActifyRx: ::actify::JobReceiver<#call_ty>,
+                __ActifyTx: #root::JobSender<#call_ty>,
+                __ActifyRx: #root::JobReceiver<#call_ty>,
             {
                 #builder(self.0.channel(__actify_channel))
             }
 
-            /// Returns the handle and the future that serves it.
-            ///
-            /// Nothing runs until the caller polls that future.
+            #[doc = #build_doc]
             pub fn build(
                 self,
             ) -> (
-                #handle<#(#names,)* #view, ::actify::DefaultSender<#call_ty>>,
-                impl ::std::future::Future<Output = ()> + Send,
+                #handle<#(#names,)* #view, #root::DefaultSender<#call_ty>>,
+                #actor_type,
             ) {
                 let (__actify_handle, __actify_actor) = self.0.build(#run);
                 (#handle(__actify_handle), __actify_actor)
@@ -308,13 +339,12 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
 
         #(#attrs)*
         impl #own_generics #own_ty #own_where {
-            /// Returns the handle and the future that serves it, over the
-            /// channel given to `channel`.
+            #[doc = #build_doc]
             pub fn build(
                 self,
             ) -> (
                 #handle<#(#names,)* #view, __ActifyTx>,
-                impl ::std::future::Future<Output = ()> + Send,
+                #actor_type,
             ) {
                 let (__actify_handle, __actify_actor) = self.0.build(#run);
                 (#handle(__actify_handle), __actify_actor)
@@ -323,8 +353,38 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
     }
 }
 
+/// The blocking builder's choice of how both ends wait.
+///
+/// The async backend has no equivalent: waiting for a future is the executor's
+/// business rather than the actor's.
+fn wait_method(
+    info: &ImplInfo,
+    bare_generics: &TokenStream,
+    builder_ty: &TokenStream,
+) -> Option<TokenStream> {
+    let attrs = &info.attributes;
+    (info.backend == crate::parse::Backend::Blocking).then(|| {
+        quote! {
+            #(#attrs)*
+            impl #bare_generics #builder_ty {
+                /// Chooses how the actor waits for jobs and how a caller waits
+                /// for replies.
+                ///
+                /// [`Park`](::actify::blocking::Wait::Park) by default;
+                /// [`Spin`](::actify::blocking::Wait::Spin) busy-waits.
+                pub fn wait(self, __actify_wait: ::actify::blocking::Wait) -> Self {
+                    Self(self.0.wait(__actify_wait))
+                }
+            }
+        }
+    })
+}
+
 /// One method on the generated handle.
 fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenStream {
+    let root = backend::root(info);
+    let asyncness = backend::asyncness(info);
+    let awaiter = backend::awaiter(info);
     // `#[deprecated]` and `#[must_use]` belong here, on the method a caller
     // reaches for, which is now the only place they are written.
     let attrs = &method.attributes;
@@ -354,16 +414,16 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
 
     quote! {
         #(#attrs)*
-        pub async fn #ident #method_generics(&self, #(#arg_names: #arg_types),*) #return_type
+        pub #asyncness fn #ident #method_generics(&self, #(#arg_names: #arg_types),*) #return_type
         #where_clause
         {
-            let (__actify_reply, __actify_rx) = ::actify::__private::reply();
+            let (__actify_reply, __actify_rx) = #root::__private::reply();
             let __actify_call: #call_ty = #call::#variant {
                 #(#arg_names,)*
                 #thunk
                 __actify_reply,
             };
-            self.0.__call(__actify_call, __actify_rx).await
+            self.0.__call(__actify_call, __actify_rx) #awaiter
         }
     }
 }
