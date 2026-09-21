@@ -1,4 +1,5 @@
-//! Procedural macros for the [actify](https://docs.rs/actify) crate.
+//! Procedural macros for this repository's `actify` crate, a hard fork of
+//! [actify](https://github.com/AvalorAI/actify).
 //!
 //! Everything here is re-exported from `actify`, and the generated code refers
 //! to `actify`'s types, so the macros only work alongside that crate.

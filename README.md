@@ -1,21 +1,15 @@
 # Actify
 
-Actify is a pre-1.0 crate used in production. The API may still change between minor versions.
+A hard fork of [actify](https://github.com/AvalorAI/actify), taken at 0.9.0. Not published to crates.io, and not tracking upstream. The API changes between commits.
 
 Sharing (mutable) state across async tasks in Rust usually means juggling mutexes and channels, and a lot of boilerplate like hand-written message enums. Actify gives you a typed, async [actor model](https://en.wikipedia.org/wiki/Actor_model) for any struct. Just add `#[actify]` to an `impl` block and call your methods through a clonable handle of the actor's own.
 
 Actify is runtime-agnostic: an actor is a future the caller spawns, on whatever executor it likes, reading from whatever channel it supplies. A call travels to it as a variant of a generated message enum, carrying its arguments and the caller's reply channel, so nothing on the way is boxed. With `#[actify(blocking)]` there is no runtime at all: the actor is a loop on a `std::thread` and the handle's methods are ordinary blocking calls.
 
-[![Crates.io][crates-badge]][crates-url]
 [![License][mit-badge]][mit-url]
-[![Docs][docs-badge]][docs-url]
 
-[crates-url]: https://crates.io/crates/actify
-[crates-badge]: https://img.shields.io/crates/v/actify.svg
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: https://github.com/AvalorAI/actify/blob/main/LICENSE
-[docs-badge]: https://docs.rs/actify/badge.svg
-[docs-url]: https://docs.rs/actify/latest/actify/
+[mit-url]: https://github.com/Sagebati/actify/blob/main/LICENSE
 
 ## Installation
 
@@ -138,6 +132,10 @@ to drive it.
 
 See `examples/no_runtime_at_all.rs` for a program that uses nothing else.
 
-For full API documentation, see [docs.rs](https://docs.rs/actify/latest/actify/).
+For full API documentation, run `cargo doc --open`.
 
-The [changelog](CHANGELOG.md) records every change.
+The [changelog](CHANGELOG.md) records every change since the fork.
+
+## Origin
+
+This began as [actify](https://github.com/AvalorAI/actify) by the Actify Contributors, under the MIT license; the original copyright notice is kept in [LICENSE](LICENSE). It has since been reworked end to end and does not follow upstream.

@@ -2,7 +2,8 @@
 #![deny(unused_must_use)]
 //! An intuitive actor model for Rust with minimal boilerplate, no manual messages and typed arguments.
 //!
-//! Actify is a pre-1.0 crate used in production. The API may still change between minor versions.
+//! A hard fork of [actify](https://github.com/AvalorAI/actify), taken at 0.9.0.
+//! Not published to crates.io, and not tracking upstream.
 //!
 //! Sharing (mutable) state across async tasks in Rust usually means juggling
 //! mutexes and channels, and a lot of boilerplate like hand-written message

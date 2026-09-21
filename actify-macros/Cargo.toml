@@ -2,7 +2,6 @@
 name = "actify-macros"
 version = "0.6.0"
 description = "Actify's procedural macros"
-documentation = "https://docs.rs/actify-macros/latest/actify_macros/"
 readme = "README.md"
 keywords = ["actor", "async", "macro", "proc-macro", "tokio"]
 categories = ["asynchronous", "development-tools::procedural-macro-helpers"]

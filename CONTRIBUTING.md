@@ -1,5 +1,9 @@
 # Contributing
 
+This is a hard fork of [actify](https://github.com/AvalorAI/actify). It is
+not published to crates.io and does not track upstream; changes here are
+changes to this repository alone.
+
 ## Building and testing
 
 The MSRV is 1.85. CI runs the following, and all of it must pass locally before
@@ -25,11 +29,32 @@ text that is always compiled.
 The MSRV is declared in three places that must agree: `rust-version` in
 `[workspace.package]`, the `MSRV` variable in `ci.yml`, and the line above.
 
+## Visibility
+
+There is no `pub(crate)` or `pub(super)` in the crate, and none should be
+added. An item is private to its module and reached by that module's
+children, or it is `pub` and reachable from the crate root. The two
+`__private` modules exist for generated code alone: they are the items the
+macro's output names, and nothing in the crate's own modules goes through
+them.
+
+## What the macro generates
+
+Read the expansion before and after changing the macro:
+
+```sh
+cargo expand --example no_runtime_at_all
+```
+
+Every `#[allow]` in generated code covers a lint that a deny-warnings build
+of a real actor was shown to trigger without it, and the reason is in a
+comment beside it. Do not add one for a lint that has not fired.
+
 ## Pinned actions
 
-Every action in `ci.yml` and `release.yml` is pinned to a commit SHA, with the
-ref it came from in a trailing comment. A tag can be moved to a different commit,
-so a tag is not a pin.
+Every action in `ci.yml` is pinned to a commit SHA, with the ref it came from
+in a trailing comment. A tag can be moved to a different commit, so a tag is
+not a pin.
 
 To move one, resolve the ref and replace both the SHA and the comment:
 
@@ -58,48 +83,19 @@ TRYBUILD=overwrite TRYBUILD_TESTS=1 cargo test -p actify-test --test unsupported
 ```
 
 Regenerate with the pinned toolchain, otherwise the committed output will not
-match what CI produces. The pin tracks the version contributors develop on, for
-the same reason: a snapshot that quotes a rustc diagnostic rather than one of
-actify's own `compile_error!` messages can only match one toolchain at a time.
-`skipped_method_not_on_handle.stderr` is such a case, since the absence of a
-generated method can only be shown by rustc's own "no method named" error.
+match what CI produces. A snapshot that quotes a rustc diagnostic rather than
+one of the macro's own `compile_error!` messages can only match one toolchain
+at a time; `skipped_method_not_on_handle.stderr` and
+`two_calls_on_one_handle.stderr` are such cases.
 
-## Releasing
+A case earns its place by being the only thing that fails when one validator
+branch breaks. Two cases asserting the same message on the same branch are
+one case too many.
 
-Publishing runs on GitHub Actions (`.github/workflows/release.yml`), triggered by
-a version tag. Local publishing is not part of the process.
+## Allocation tests
 
-1. Update `CHANGELOG.md`.
-2. Bump `actify/Cargo.toml`. Bump `actify-macros/Cargo.toml` if the macro crate
-   changed, and update actify's dependency requirement to match.
-3. Merge to `main`.
-4. Tag the merge commit and push it:
-
-   ```sh
-   git tag v0.8.3
-   git push origin v0.8.3
-   ```
-
-The workflow asserts that the tag matches actify's version and that actify's
-requirement on actify-macros matches the workspace, runs the full CI gate, then
-publishes actify-macros followed by actify. actify-macros is skipped when that
-version is already on crates.io.
-
-Publishing is irreversible. crates.io allows yanking, never deletion or version
-reuse.
-
-### One-time setup
-
-The `publish` job authenticates through crates.io trusted publishing, so no token
-is stored in the repository. Both crates need a trusted publisher registered at
-`https://crates.io/crates/<crate>/settings`, with:
-
-| Field | Value |
-| --- | --- |
-| Repository owner | `AvalorAI` |
-| Repository name | `actify` |
-| Workflow filename | `release.yml` |
-| Environment | `release` |
-
-The `release` GitHub environment gates the publish step. Add required reviewers to
-it to approve each release before it is pushed to crates.io.
+`actify-test/tests/allocations.rs` and `blocking_allocations.rs` count what a
+single call allocates and assert an exact number. Each lives in its own
+binary because the counter is process-wide, and each holds a single test for
+the same reason. A change that moves the count is a change to the crate's
+contract and belongs in the changelog.
