@@ -67,8 +67,8 @@ impl<T: Clone> ToView<T> for T {
 ///
 /// The second type parameter `V` is the view the handle exposes: what
 /// [`Handle::get`] returns. By default `V = T`, so a read is a clone of the
-/// actor itself. To expose a different type, implement [`ToView<V>`] and
-/// specify `V` explicitly (e.g. `Handle::<MyType, Summary>::new(val)`).
+/// actor itself. To expose a different type, implement [`ToView<V>`] and name
+/// it on the generated handle, as in `MyTypeHandle::<Summary>::new(val)`.
 pub struct Handle<T, V, M, S = DefaultSender<M>> {
     // The `Arc` is what makes a handle one pointer wide and what stops the
     // actor: the last handle to drop drops the only sending half with it.

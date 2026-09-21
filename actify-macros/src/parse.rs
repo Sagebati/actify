@@ -161,6 +161,10 @@ impl MethodInfo {
 
         let mut errors = None;
 
+        if let Err(error) = validate_method_name(method) {
+            accumulate(&mut errors, error);
+        }
+
         if let Err(error) = validate_signature_modifiers(method) {
             accumulate(&mut errors, error);
         }
@@ -356,6 +360,35 @@ fn validate_method_generics(method: &ImplItemFn) -> syn::Result<()> {
         return Err(Error::new_spanned(
             method.sig.generics.where_clause.as_ref().unwrap(),
             "An async actor method cannot carry a where clause of its own: the call would have to reach it through a function pointer, and one to an async method returns a future the message cannot hold",
+        ));
+    }
+
+    Ok(())
+}
+
+/// The methods every generated handle has, whatever its actor declares.
+///
+/// An actor method of the same name would be a second definition of it on the
+/// same type, which rustc reports as `E0592` pointing at the `#[actify]`
+/// attribute rather than at the method, with nothing to say why.
+const RESERVED_METHOD_NAMES: [&str; 6] =
+    ["new", "builder", "from_handle", "get", "set", "read_handle"];
+
+/// Validate that the method's name is still free on the generated handle.
+///
+/// `new` is only emitted where actify can spawn, but it is reserved either way:
+/// a name that compiles with one feature set and not another is worse than one
+/// that never compiles.
+fn validate_method_name(method: &ImplItemFn) -> syn::Result<()> {
+    let name = method.sig.ident.to_string();
+    if RESERVED_METHOD_NAMES.contains(&name.as_str()) {
+        return Err(Error::new(
+            method.sig.ident.span(),
+            format!(
+                "`{name}` is one of the methods every generated handle already has, so the handle \
+                 would define it twice (rename the method, or keep it off the handle with \
+                 #[actify::skip] and call it on the actor directly)"
+            ),
         ));
     }
 

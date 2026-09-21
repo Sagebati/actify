@@ -1,0 +1,11 @@
+error: `get` is one of the methods every generated handle already has, so the handle would define it twice (rename the method, or keep it off the handle with #[actify::skip] and call it on the actor directly)
+  --> tests/compile_fail/reserved_method_name.rs:12:8
+   |
+12 |     fn get(&self, index: usize) -> Option<i32> {
+   |        ^^^
+
+error: `builder` is one of the methods every generated handle already has, so the handle would define it twice (rename the method, or keep it off the handle with #[actify::skip] and call it on the actor directly)
+  --> tests/compile_fail/reserved_method_name.rs:16:8
+   |
+16 |     fn builder(&self) -> usize {
+   |        ^^^^^^^

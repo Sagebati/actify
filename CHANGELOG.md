@@ -28,9 +28,9 @@ what makes the channel agnostic in more than name. It is breaking throughout.
 
   Everything else is the same generated code: the same message enum, the same
   `get`, `set`, `read_handle` and `#[skip]`, the same `actor` span and exit
-  events, the same panic contract, and the same two allocations per call. The
-  reply channel is a one-`Arc` slot in place of the futures oneshot, since a
-  thread cannot wait on a future.
+  events and the same panic contract. A call costs one allocation for the reply
+  plus whatever the channel charges per message, which for a `sync_channel` is
+  nothing at all, so it is at or under the async backend's two.
 
   An `async fn` in a blocking block is a compile error: there is no runtime to
   drive it.
@@ -119,9 +119,9 @@ what makes the channel agnostic in more than name. It is breaking throughout.
   `read_handle` and one method per actified method. Its message type is that
   actor's enum, which is what lets a call be data at all.
 
-  `Handle::new(Greeter {})` still builds an actor, but the handle it returns
-  carries only the built-in calls. Write `GreeterHandle::new(Greeter {})` for
-  one that carries the methods too.
+  `Handle` is no longer constructible, so `GreeterHandle::new(Greeter {})` is
+  the way in. An actor with nothing worth exposing writes an empty `#[actify]`
+  block and gets `get`, `set` and `read_handle` from it.
 
   A handle can no longer be mocked behind the generated trait, since there is
   no trait. A caller wanting to stand in for an actor defines its own trait
@@ -133,8 +133,20 @@ what makes the channel agnostic in more than name. It is breaking throughout.
   A block generates a handle and a message type, and an actor owns one state
   served through one channel. A second block generates the same two names,
   which the compiler reports as items defined twice. `#[actify(name = "...")]`
-  is gone with the reason for it. Blocks that a `#[cfg]` makes mutually
+  renames both, so a second block on the same type can still be given a handle
+  of its own - but the two handles are two actors, each with its own state and
+  channel, not two views of one. Blocks that a `#[cfg]` makes mutually
   exclusive still work, because only one of them ever exists.
+
+
+- An actor method cannot be named `new`, `builder`, `from_handle`, `get`, `set`
+  or `read_handle`.
+
+  Those are the methods every generated handle has, so one of the same name
+  would be defined on the handle twice. The macro now says so and points at the
+  method; before this it was an `E0592` pointing at the `#[actify]` attribute
+  with nothing to explain it. `#[actify::skip]` keeps such a method off the
+  handle, and it stays callable on the actor type itself.
 
 
 - A method cannot declare generic parameters of its own.
@@ -152,17 +164,17 @@ what makes the channel agnostic in more than name. It is breaking throughout.
 
 - An actor is a future the caller spawns, rather than a task actify spawns.
 
-  `Handle::builder(val).build()` returns the handle and the future that serves
-  it, and the caller spawns that future on any executor. Nothing runs until it
-  is polled, so a handle whose future was never spawned panics on every call,
-  reporting that the actor is not running.
+  `GreeterHandle::builder(val).build()` returns the handle and the future that
+  serves it, and the caller spawns that future on any executor. Nothing runs
+  until it is polled, so a handle whose future was never spawned panics on
+  every call, reporting that the actor is not running.
 
-  `Handle::new` stays as the Tokio spelling of a build followed by a
+  `GreeterHandle::new` stays as the Tokio spelling of a build followed by a
   `tokio::spawn`, behind the new default `tokio` feature. With
   `default-features = false` there is no Tokio in the dependency graph at all.
 
   ```rust
-  let (handle, actor) = Handle::builder(Greeter {}).build();
+  let (handle, actor) = GreeterHandle::builder(Greeter {}).build();
   tokio::spawn(actor);
   ```
 

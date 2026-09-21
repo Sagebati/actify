@@ -44,6 +44,9 @@ fn compile_fail_tests() {
     t.compile_fail("tests/compile_fail/async_method_in_blocking_block.rs");
     t.compile_fail("tests/compile_fail/by_value_self.rs");
 
+    // Names the generated handle already uses
+    t.compile_fail("tests/compile_fail/reserved_method_name.rs");
+
     // Skipped methods
     t.compile_fail("tests/compile_fail/skipped_method_not_on_handle.rs");
 

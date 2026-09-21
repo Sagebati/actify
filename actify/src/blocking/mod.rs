@@ -58,9 +58,15 @@
 //!
 //! # What a call costs
 //!
-//! The same two allocations as an async call: the reply channel and the queue
-//! slot that carries the message. Arguments and results travel inside the
-//! message enum at their own types, so nothing is boxed or downcast.
+//! One allocation for the reply channel, plus whatever the job channel charges
+//! to carry a message. A [`sync_channel`](std::sync::mpsc::sync_channel)
+//! allocates its buffer once and nothing per message, so over one of those a
+//! call is exactly one allocation; the unbounded default allocates its queue in
+//! blocks, so it adds an amortised fraction of one. Either way it is at or
+//! under the async backend's two.
+//!
+//! Arguments and results travel inside the message enum at their own types, so
+//! nothing is boxed or downcast.
 //!
 //! # Deadlocks
 //!

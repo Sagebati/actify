@@ -124,9 +124,10 @@ assert_eq!(handle.get(), Counter(2));
 
 The channel is a blocking one (`std::sync::mpsc` by default, or anything that
 implements the two public traits), and `Wait` chooses whether the actor and its
-callers park or busy-wait. A call costs the same two allocations as an async
-one. An `async fn` in such a block is a compile error, since nothing is there to
-drive it.
+callers park or busy-wait. A call costs one allocation for the reply plus
+whatever the channel charges per message, which for a `sync_channel` is nothing
+at all. An `async fn` in such a block is a compile error, since nothing is there
+to drive it.
 
 See `examples/no_runtime_at_all.rs` for a program that uses nothing else.
 

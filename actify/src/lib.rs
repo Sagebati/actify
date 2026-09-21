@@ -437,14 +437,14 @@
 //!
 //! # Views and non-Clone types
 //!
-//! A handle exposes a view of its actor: the type `V` that [`Handle::get`]
-//! returns. By default `V = T`, so `new` requires `T: Clone` and the
-//! view is a clone of the value.
+//! A handle exposes a view of its actor: the type `V` that `get` returns. By
+//! default `V = T`, so `new` requires `T: Clone` and the view is a clone of the
+//! value.
 //!
 //! For a non-Clone type, or to expose a summary instead of the whole value,
-//! implement [`ToView<V>`] for a Clone-able `V` and name it explicitly:
-//! `Handle::<MyType, Summary>::new(val)`. Reads then return the summary, and an
-//! `#[actify]` method is what reaches past it to the actor type itself.
+//! implement [`ToView<V>`] for a Clone-able `V` and name it on the generated
+//! handle: `MyTypeHandle::<Summary>::new(val)`. Reads then return the summary,
+//! and an `#[actify]` method is what reaches past it to the actor type itself.
 //!
 //! # Execution model
 //!
