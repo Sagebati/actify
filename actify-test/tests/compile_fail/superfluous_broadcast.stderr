@@ -1,5 +1,0 @@
-error: #[broadcast] is superfluous: methods taking &mut self broadcast by default
- --> tests/compile_fail/superfluous_broadcast.rs:9:5
-  |
-9 |     #[actify::broadcast]
-  |     ^

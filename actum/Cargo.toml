@@ -1,0 +1,39 @@
+[package]
+name = "actum"
+version = "0.9.0"
+description = "An intuitive actor model with minimal boilerplate"
+readme = "../README.md"
+keywords = ["actor", "async", "tokio", "concurrency", "macro"]
+categories = ["asynchronous", "concurrency"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["rt"], optional = true }
+futures-core = { workspace = true, features = ["std"] }
+futures-sink = { workspace = true, features = ["std"] }
+futures-channel = { workspace = true, features = ["std", "sink"] }
+oneshot.workspace = true
+tracing = { workspace = true, features = ["std"] }
+actum-macros.workspace = true
+
+[dev-dependencies]
+futures-executor = "0.3"
+# For the worker-pool example: a channel whose receiver clones.
+flume = { version = "0.12", default-features = false }
+# For the embassy example: the executor on a host thread, its channel, and the
+# critical-section implementation both need there.
+embassy-executor = { version = "0.10", features = ["platform-std", "executor-thread"] }
+embassy-sync = "0.8"
+critical-section = { version = "1", features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[features]
+default = ["tokio"]
+# `Handle::new`, which builds an actor and spawns it on Tokio in one call.
+# Without it the caller spawns the actor future itself, on any executor.
+tokio = ["dep:tokio", "actum-macros/tokio"]
+# Emits the events as log records whenever no tracing subscriber is set.
+log = ["tracing/log"]
