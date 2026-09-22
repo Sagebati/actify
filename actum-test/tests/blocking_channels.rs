@@ -153,3 +153,39 @@ fn test_both_std_senders_are_job_senders() {
     assert_sender::<GreeterCall, Sender<GreeterCall>>();
     assert_sender::<GreeterCall, SyncSender<GreeterCall>>();
 }
+
+/// An actor whose own parameters are the names the generated handle and
+/// builder would pick for theirs. The macro has to step aside for every one.
+struct Relay<S, C, Tx, Rx> {
+    state: S,
+    _rest: std::marker::PhantomData<(C, Tx, Rx)>,
+}
+
+#[actum(blocking)]
+impl<S, C, Tx, Rx> Relay<S, C, Tx, Rx>
+where
+    S: Clone + Send + 'static,
+    C: Send + 'static,
+    Tx: Send + 'static,
+    Rx: Send + 'static,
+{
+    fn state(&self) -> S {
+        self.state.clone()
+    }
+}
+
+#[test]
+fn test_the_actors_own_parameter_names_are_stepped_around() {
+    let (handle, actor) = RelayHandle::builder(Relay::<u8, (), (), ()> {
+        state: 7,
+        _rest: std::marker::PhantomData,
+    })
+    .channel(std::sync::mpsc::sync_channel(1))
+    .build();
+    let running = std::thread::spawn(actor);
+
+    assert_eq!(handle.state(), 7);
+
+    drop(handle);
+    stops(running);
+}

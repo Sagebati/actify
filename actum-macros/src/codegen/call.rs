@@ -6,7 +6,7 @@
 
 use super::backend;
 use crate::parse::{ImplInfo, MethodInfo};
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{Attribute, GenericParam, Ident};
 
@@ -142,6 +142,29 @@ pub fn declared_params(info: &ImplInfo) -> Vec<TokenStream> {
         .collect()
 }
 
+/// A type parameter for generated code that the actor does not already
+/// declare: `base` when it is free, else `base` with the first free digit.
+///
+/// The generated struct and its methods share a scope with the impl block's
+/// own parameters, and a repeated name there is an error rather than a
+/// shadow. Digits keep the fallback camel-case, so no lint fires on it.
+pub fn fresh_param(info: &ImplInfo, base: &str) -> Ident {
+    let taken = |name: &str| {
+        info.generics.params.iter().any(|param| match param {
+            GenericParam::Type(ty) => ty.ident == name,
+            GenericParam::Const(konst) => konst.ident == name,
+            GenericParam::Lifetime(_) => false,
+        })
+    };
+    let mut name = base.to_string();
+    let mut digit = 2;
+    while taken(&name) {
+        name = format!("{base}{digit}");
+        digit += 1;
+    }
+    Ident::new(&name, Span::call_site())
+}
+
 /// The name of the generated loop, e.g. `__actum_run_greeter_call`.
 pub fn run_ident(info: &ImplInfo) -> Ident {
     let call = &info.call_enum_ident;
@@ -275,12 +298,12 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
 
         #(#attrs)*
         impl #impl_generics ::std::fmt::Debug for #call_ty #where_clause {
-            fn fmt(&self, __actum_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                let __actum_variant: &str = match self {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                let variant: &str = match self {
                     #(#debug_arms)*
-                    #call::__ActumMarker(_, __actum_never) => match *__actum_never {},
+                    #call::__ActumMarker(_, never) => match *never {},
                 };
-                ::std::write!(__actum_f, "{}::{}", #call_name, __actum_variant)
+                ::std::write!(f, "{}::{}", #call_name, variant)
             }
         }
 

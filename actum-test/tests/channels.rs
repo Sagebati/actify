@@ -97,3 +97,40 @@ fn test_an_actor_is_served_wherever_the_caller_spawns_it() {
     drop(handle);
     served.join().unwrap();
 }
+
+/// An actor whose own parameters are the names the generated handle and
+/// builder would pick for theirs. The macro has to step aside for every one.
+struct Relay<S, C, Tx, Rx> {
+    state: S,
+    _rest: std::marker::PhantomData<(C, Tx, Rx)>,
+}
+
+#[actum]
+impl<S, C, Tx, Rx> Relay<S, C, Tx, Rx>
+where
+    S: Clone + Send + Sync + 'static,
+    C: Send + Sync + 'static,
+    Tx: Send + Sync + 'static,
+    Rx: Send + Sync + 'static,
+{
+    fn state(&self) -> S {
+        self.state.clone()
+    }
+}
+
+#[tokio::test]
+async fn test_the_actors_own_parameter_names_are_stepped_around() {
+    let (tx, rx) = futures_channel::mpsc::channel(1);
+    let (mut handle, actor) = RelayHandle::builder(Relay::<u8, (), (), ()> {
+        state: 7,
+        _rest: std::marker::PhantomData,
+    })
+    .channel((tx, rx))
+    .build();
+    let task = tokio::spawn(actor);
+
+    assert_eq!(handle.state().await, 7);
+
+    drop(handle);
+    stops(async { task.await.unwrap() }).await;
+}

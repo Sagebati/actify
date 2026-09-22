@@ -5,18 +5,19 @@
 //! to the generated enum. That is what lets a call travel as data.
 
 use crate::parse::{ImplInfo, MethodInfo};
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::Ident;
 
 use super::backend;
 use super::call::{
-    Carrier, call_type, carrier, declared_params, param_names, run_ident, variant_ident,
+    Carrier, call_type, carrier, declared_params, fresh_param, param_names, run_ident,
+    variant_ident,
 };
 
 /// The sender parameter the generated handle declares.
-fn sender() -> Ident {
-    Ident::new("__ActumS", Span::call_site())
+fn sender(info: &ImplInfo) -> Ident {
+    fresh_param(info, "S")
 }
 
 /// Generates the handle struct, its constructors, and one method per actified
@@ -25,7 +26,7 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
     let attrs = &info.attributes;
     let handle = &info.handle_trait_ident;
     let impl_type = &info.impl_type;
-    let sender = sender();
+    let sender = sender(info);
     let call_ty = call_type(info);
     let root = backend::root(info);
 
@@ -96,9 +97,9 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
 
         #(#attrs)*
         impl #bare_generics ::std::fmt::Debug for #handle_ty {
-            fn fmt(&self, __actum_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 ::std::write!(
-                    __actum_f,
+                    f,
                     "{}<{}>",
                     #debug_name,
                     ::std::any::type_name::<#impl_type>()
@@ -135,8 +136,8 @@ fn constructors(info: &ImplInfo) -> TokenStream {
         quote! {
             #[doc = #new_doc]
             #[track_caller]
-            pub fn new(__actum_val: #impl_type) -> Self {
-                #handle(#root::__private::spawn(__actum_val, #run))
+            pub fn new(val: #impl_type) -> Self {
+                #handle(#root::__private::spawn(val, #run))
             }
         }
     });
@@ -161,8 +162,8 @@ fn constructors(info: &ImplInfo) -> TokenStream {
 
         #[doc = #builder_doc]
         #[track_caller]
-        pub fn builder(__actum_val: #impl_type) -> #builder<#(#names,)*> {
-            #builder(#root::__private::builder(__actum_val))
+        pub fn builder(val: #impl_type) -> #builder<#(#names,)*> {
+            #builder(#root::__private::builder(val))
         }
     }
 }
@@ -190,7 +191,9 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
 
     let declared = declared_params(info);
     let names = param_names(info);
-    let channel = Ident::new("__ActumC", Span::call_site());
+    let channel = fresh_param(info, "C");
+    let tx = fresh_param(info, "Tx");
+    let rx = fresh_param(info, "Rx");
     let builder_ty = quote! { #builder<#(#names,)* #channel> };
 
     let mut common = info.generics.clone();
@@ -206,12 +209,12 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
     let mut own_channel = common.clone();
     own_channel
         .params
-        .push(syn::parse_quote!(__ActumTx: #sender_bound));
+        .push(syn::parse_quote!(#tx: #sender_bound));
     own_channel
         .params
-        .push(syn::parse_quote!(__ActumRx: #receiver_bound));
+        .push(syn::parse_quote!(#rx: #receiver_bound));
     let (own_generics, _, own_where) = own_channel.split_for_impl();
-    let own_ty = quote! { #builder<#(#names,)* (__ActumTx, __ActumRx)> };
+    let own_ty = quote! { #builder<#(#names,)* (#tx, #rx)> };
 
     let mut bare = info.generics.clone();
     bare.params.push(syn::parse_quote!(#channel));
@@ -250,8 +253,8 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
 
         #(#attrs)*
         impl #bare_generics ::std::fmt::Debug for #builder_ty {
-            fn fmt(&self, __actum_f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                ::std::write!(__actum_f, "{}", #debug_name)
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                ::std::write!(f, "{}", #debug_name)
             }
         }
 
@@ -263,15 +266,15 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
             /// the default unbounded one.
             ///
             /// A bounded channel is how backpressure is asked for.
-            pub fn channel<__ActumTx, __ActumRx>(
+            pub fn channel<#tx, #rx>(
                 self,
-                __actum_channel: (__ActumTx, __ActumRx),
-            ) -> #builder<#(#names,)* (__ActumTx, __ActumRx)>
+                channel: (#tx, #rx),
+            ) -> #builder<#(#names,)* (#tx, #rx)>
             where
-                __ActumTx: #sender_bound,
-                __ActumRx: #receiver_bound,
+                #tx: #sender_bound,
+                #rx: #receiver_bound,
             {
-                #builder(self.0.channel(__actum_channel))
+                #builder(self.0.channel(channel))
             }
 
             #[doc = #build_doc]
@@ -281,8 +284,8 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
                 #handle<#(#names,)* #root::DefaultSender<#call_ty>>,
                 #actor_type,
             ) {
-                let (__actum_handle, __actum_actor) = self.0.build(#run);
-                (#handle(__actum_handle), __actum_actor)
+                let (handle, actor) = self.0.build(#run);
+                (#handle(handle), actor)
             }
         }
 
@@ -292,11 +295,11 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
             pub fn build(
                 self,
             ) -> (
-                #handle<#(#names,)* __ActumTx>,
+                #handle<#(#names,)* #tx>,
                 #actor_type,
             ) {
-                let (__actum_handle, __actum_actor) = self.0.build(#run);
-                (#handle(__actum_handle), __actum_actor)
+                let (handle, actor) = self.0.build(#run);
+                (#handle(handle), actor)
             }
         }
     }
@@ -321,8 +324,8 @@ fn wait_method(
                 ///
                 /// [`Park`](::actum::blocking::Wait::Park) by default;
                 /// [`Spin`](::actum::blocking::Wait::Spin) busy-waits.
-                pub fn wait(self, __actum_wait: ::actum::blocking::Wait) -> Self {
-                    Self(self.0.wait(__actum_wait))
+                pub fn wait(self, wait: ::actum::blocking::Wait) -> Self {
+                    Self(self.0.wait(wait))
                 }
             }
         }
