@@ -98,6 +98,10 @@ a handle kept in a struct needs either a `&mut self` method or a `.clone()`.
 See `examples/spawn_it_yourself.rs` for an actor served without Tokio anywhere
 in the graph.
 
+See `examples/on_embassy.rs` for the same actor on embassy, the embedded async
+runtime, over its own static channel: one thread, no Tokio, and no allocation
+for the queue.
+
 See `examples/ten_producers.rs` for ten tasks feeding one actor through a
 bounded channel: each holds a clone of the handle, and the actor is the one
 consumer.
