@@ -6,7 +6,7 @@ changes to this repository alone.
 
 ## Building and testing
 
-The MSRV is 1.85. CI runs the following, and all of it must pass locally before
+The MSRV is 1.87. CI runs the following, and all of it must pass locally before
 pushing:
 
 ```sh

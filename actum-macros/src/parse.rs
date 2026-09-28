@@ -30,6 +30,9 @@ pub enum Backend {
 pub struct ImplInfo {
     /// Whether this block asked for a blocking actor.
     pub backend: Backend,
+    /// `#[actum(blocking, no_alloc)]`: the reply is a slot on the caller's
+    /// stack rather than a heap channel, and there is no default job queue.
+    pub no_alloc: bool,
     /// The full impl type, e.g. `TestStruct<T>`.
     pub impl_type: Box<Type>,
     /// Generated handle name, e.g. `TestStructHandle`.
@@ -55,6 +58,7 @@ impl ImplInfo {
         impl_block: &mut ItemImpl,
         custom_name: Option<syn::LitStr>,
         backend: Backend,
+        no_alloc: bool,
     ) -> syn::Result<ImplInfo> {
         let type_ident = get_impl_type_ident(&impl_block.self_ty)?;
 
@@ -111,6 +115,7 @@ impl ImplInfo {
 
         Ok(ImplInfo {
             backend,
+            no_alloc,
             impl_type: impl_block.self_ty.clone(),
             handle_trait_ident,
             call_enum_ident,

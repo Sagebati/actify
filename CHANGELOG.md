@@ -40,6 +40,8 @@ Forked from actify 0.9.0. What is different, and why:
 
 - Handles take no closures. A closure is not data, and a call is.
 
+- The MSRV is 1.87, up from 1.85, which is what `heapless` 0.9 asks for.
+
 ### Added
 
 - A blocking backend, `#[actum(blocking)]`. The actor runs on a
@@ -48,6 +50,14 @@ Forked from actify 0.9.0. What is different, and why:
   reply channel is the `oneshot` crate's; the job channel is `std::sync::mpsc`
   by default, or anything implementing `blocking::JobSender` and
   `blocking::JobReceiver`.
+
+- `#[actum(blocking, no_alloc)]`: a blocking actor whose calls allocate
+  nothing. The reply is a slot on the caller's stack and the job queue is a
+  `static` ring buffer, `blocking::no_alloc::Queue`, both from `heapless`.
+  There is no default channel, so `build` exists only after `channel`.
+  This is the library's one `unsafe`, a lifetime erased in `Slot::split`,
+  and blocking is the backend it is sound on: a blocking call cannot return
+  before its reply lands, where a future can be dropped mid-flight.
 
 ### Removed
 

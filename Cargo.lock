@@ -15,6 +15,7 @@ dependencies = [
  "futures-core",
  "futures-executor",
  "futures-sink",
+ "heapless",
  "oneshot",
  "tokio",
  "tracing",

@@ -140,6 +140,13 @@ to drive it.
 
 See `examples/no_runtime_at_all.rs` for a program that uses nothing else.
 
+`#[actum(blocking, no_alloc)]` takes the last allocation away too. The reply
+becomes a slot on the caller's stack and the job queue a `static` ring buffer,
+`blocking::no_alloc::Queue`, so a call touches the allocator not at all. It is
+blocking-only because a blocking call cannot return before its reply lands,
+which is what makes a stack slot sound. See `examples/no_alloc.rs`, which
+counts a thousand calls from two threads at zero allocations.
+
 See `examples/worker_pool.rs` for the other shape: four actors draining one
 queue, many producers and many consumers, over a channel brought from outside
 the crate.

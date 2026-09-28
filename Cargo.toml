@@ -9,7 +9,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 license = "MIT"
 repository = "https://github.com/Sagebati/actify"
 
@@ -28,5 +28,8 @@ futures-channel = { version = "0.3", default-features = false }
 # wait-free `try_recv` the spinning caller uses needs no feature at all, and
 # `async` is deliberately off, since a blocking handle's methods never await.
 oneshot = { version = "0.2.1", default-features = false, features = ["std"] }
+# The `no_alloc` blocking actor's channels: a static ring buffer for jobs and
+# a stack slot for the reply. Its 0.9 line states an MSRV of 1.87.
+heapless = { version = "0.9", default-features = false }
 tracing = { version = "0.1", default-features = false }
 trybuild = "1"

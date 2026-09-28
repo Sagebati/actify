@@ -90,6 +90,12 @@ pub fn reply<R>() -> (Reply<R>, Answer<R>) {
     (Reply(sender), Answer(receiver))
 }
 
+impl<R> super::Receive<R> for Answer<R> {
+    fn recv(self, wait: Wait) -> Result<R, Closed> {
+        Answer::recv(self, wait)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

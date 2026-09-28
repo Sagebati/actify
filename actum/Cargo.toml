@@ -16,6 +16,7 @@ futures-core = { workspace = true, features = ["std"] }
 futures-sink = { workspace = true, features = ["std"] }
 futures-channel = { workspace = true, features = ["std", "sink"] }
 oneshot.workspace = true
+heapless.workspace = true
 tracing = { workspace = true, features = ["std"] }
 actum-macros.workspace = true
 

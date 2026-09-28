@@ -50,7 +50,47 @@ pub fn actor_type(info: &ImplInfo) -> TokenStream {
 pub fn can_spawn(info: &ImplInfo) -> bool {
     match info.backend {
         Backend::Async => cfg!(feature = "tokio"),
-        Backend::Blocking => true,
+        Backend::Blocking => has_default_channel(info),
+    }
+}
+
+/// Whether the builder can make a channel of its own, so that `build` exists
+/// before `channel` has been called.
+///
+/// A `no_alloc` actor's default would be a std queue, which allocates, so it
+/// has none: its `build` exists only on a builder that was given a channel,
+/// and a forgotten `.channel(..)` is a compile error rather than a heap.
+pub fn has_default_channel(info: &ImplInfo) -> bool {
+    !(info.backend == Backend::Blocking && info.no_alloc)
+}
+
+/// The actor's half of a call's reply channel, as the message carries it.
+///
+/// A heap channel for the async backend and the plain blocking one; a slot on
+/// the caller's stack for `no_alloc`.
+pub fn reply_type(info: &ImplInfo, output: &syn::Type) -> TokenStream {
+    if has_default_channel(info) {
+        let root = root(info);
+        quote! { #root::__private::Reply<#output> }
+    } else {
+        quote! { ::actum::blocking::no_alloc::Reply<#output> }
+    }
+}
+
+/// Makes a call's reply channel at the top of the generated forwarder,
+/// binding `__actum_reply` for the message and `__actum_rx` for the wait.
+///
+/// The `no_alloc` slot is a local of the forwarder, which is what puts it on
+/// the caller's stack and keeps it there for the length of the call.
+pub fn reply_prelude(info: &ImplInfo) -> TokenStream {
+    if has_default_channel(info) {
+        let root = root(info);
+        quote! { let (__actum_reply, __actum_rx) = #root::__private::reply(); }
+    } else {
+        quote! {
+            let mut __actum_slot = ::actum::blocking::no_alloc::Slot::new();
+            let (__actum_reply, __actum_rx) = __actum_slot.split();
+        }
     }
 }
 

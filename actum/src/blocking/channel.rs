@@ -56,6 +56,10 @@ pub trait JobSender<M>: Send + Sync + 'static {
     /// the backpressure being asked for; it parks whatever the handle's
     /// [`Wait`](super::Wait) is, because spinning while another thread is meant
     /// to drain the queue only makes it slower.
+    ///
+    /// A send that fails drops the job rather than keeping it: a job carries
+    /// its caller's reply channel, and a `no_alloc` caller is waiting on a
+    /// slot on its own stack for that channel to be dropped or answered.
     fn send(&self, job: M) -> Result<(), Closed>;
 }
 

@@ -226,13 +226,14 @@ pub fn generate(info: &ImplInfo) -> TokenStream {
             let ty = thunk_type(method, impl_type);
             quote! { __actum_thunk: #ty, }
         });
+        let reply = backend::reply_type(info, output);
         quote! {
             #[doc = #doc]
             #(#attrs)*
             #variant {
                 #(#arg_names: #arg_types,)*
                 #thunk
-                __actum_reply: #root::__private::Reply<#output>,
+                __actum_reply: #reply,
             },
         }
     });

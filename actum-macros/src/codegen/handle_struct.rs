@@ -150,6 +150,16 @@ fn constructors(info: &ImplInfo) -> TokenStream {
              `build` hands back this handle and that future, so the caller\n\
              chooses the executor."
         }
+        crate::parse::Backend::Blocking if info.no_alloc => {
+            " Starts building a handle whose actor the caller runs, over a\n\
+             channel the caller supplies.\n\n\
+             There is no default channel, because the default would allocate:\n\
+             `build` exists only after `channel`, which takes the two halves\n\
+             of a `static` [`no_alloc::Queue`](::actum::blocking::no_alloc::Queue).\n\
+             `build` hands back this handle and a closure, so the caller\n\
+             chooses the thread and keeps its `JoinHandle`. It is also where\n\
+             `wait` chooses between parking and busy-waiting."
+        }
         crate::parse::Backend::Blocking => {
             " Starts building a handle whose actor the caller runs.\n\n\
              `build` hands back this handle and a closure, so the caller\n\
@@ -242,6 +252,20 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
              `std::thread::spawn`."
         }
     };
+    let default_build = backend::has_default_channel(info).then(|| {
+        quote! {
+            #[doc = #build_doc]
+            pub fn build(
+                self,
+            ) -> (
+                #handle<#(#names,)* #root::DefaultSender<#call_ty>>,
+                #actor_type,
+            ) {
+                let (handle, actor) = self.0.build(#run);
+                (#handle(handle), actor)
+            }
+        }
+    });
 
     quote! {
         #[doc = #doc]
@@ -277,16 +301,7 @@ fn generate_builder(info: &ImplInfo) -> TokenStream {
                 #builder(self.0.channel(channel))
             }
 
-            #[doc = #build_doc]
-            pub fn build(
-                self,
-            ) -> (
-                #handle<#(#names,)* #root::DefaultSender<#call_ty>>,
-                #actor_type,
-            ) {
-                let (handle, actor) = self.0.build(#run);
-                (#handle(handle), actor)
-            }
+            #default_build
         }
 
         #(#attrs)*
@@ -334,7 +349,6 @@ fn wait_method(
 
 /// One method on the generated handle.
 fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenStream {
-    let root = backend::root(info);
     let asyncness = backend::asyncness(info);
     let awaiter = backend::awaiter(info);
     let receiver = backend::receiver(info);
@@ -371,6 +385,7 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
     // never names its method - only the loop does - so only a thunked one
     // needs the allowance.
     let allow_deprecated = thunked.then(|| quote! { #[allow(deprecated)] });
+    let reply_prelude = backend::reply_prelude(info);
 
     quote! {
         #(#attrs)*
@@ -378,7 +393,7 @@ fn method(method: &MethodInfo, info: &ImplInfo, call_ty: &TokenStream) -> TokenS
         pub #asyncness fn #ident #method_generics(#receiver, #(#arg_names: #arg_types),*) #return_type
         #where_clause
         {
-            let (__actum_reply, __actum_rx) = #root::__private::reply();
+            #reply_prelude
             let __actum_call: #call_ty = #call::#variant {
                 #(#arg_names,)*
                 #thunk

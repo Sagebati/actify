@@ -70,6 +70,9 @@
 //! Arguments and results travel inside the message enum at their own types, so
 //! nothing is boxed or downcast.
 //!
+//! `#[actum(blocking, no_alloc)]` takes the reply off the heap as well, and
+//! serves the actor from a `static` queue: see [`no_alloc`].
+//!
 //! # Deadlocks
 //!
 //! A blocking call occupies its thread until the actor answers, so an actor
@@ -83,12 +86,11 @@ use std::marker::PhantomData;
 
 mod builder;
 mod channel;
+pub mod no_alloc;
 mod reply;
 
 pub use builder::{DefaultChannel, HandleBuilder};
 pub use channel::{Closed, JobReceiver, JobSender, Next};
-
-use reply::Answer;
 
 /// How a blocking actor and its callers wait.
 ///
@@ -185,13 +187,25 @@ impl<T, M, S> Handle<T, M, S> {
     }
 }
 
+/// The caller's half of a reply channel, whichever kind the actor was
+/// declared with: the heap one from [`reply`], or the stack slot from
+/// [`no_alloc`].
+///
+/// Not part of the public API.
+#[doc(hidden)]
+pub trait Receive<R> {
+    /// Waits for the reply the way the handle was built to wait, reporting
+    /// [`Closed`] when the actor dropped its half without answering.
+    fn recv(self, wait: Wait) -> Result<R, Closed>;
+}
+
 impl<T, M, S: JobSender<M>> Handle<T, M, S> {
     /// Queues one call and blocks until its reply arrives.
     ///
     /// The reply channel is the caller's to make, so that it carries the
     /// method's own return type rather than something erased.
     #[doc(hidden)]
-    pub fn __call<R>(&self, message: M, answer: Answer<R>) -> R {
+    pub fn __call<R, A: Receive<R>>(&self, message: M, answer: A) -> R {
         if self.sender.send(message).is_ok() {
             if let Ok(res) = answer.recv(self.wait) {
                 return res;

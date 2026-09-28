@@ -36,6 +36,9 @@ struct ActumArgs {
     custom_name: Option<syn::LitStr>,
     /// `#[actum(blocking)]`: the actor runs on a thread, not on a future.
     blocking: bool,
+    /// `#[actum(blocking, no_alloc)]`: the reply is a slot on the caller's
+    /// stack and the job queue is a static, so a call allocates nothing.
+    no_alloc: Option<syn::Ident>,
 }
 
 impl syn::parse::Parse for ActumArgs {
@@ -43,6 +46,7 @@ impl syn::parse::Parse for ActumArgs {
         let mut args = ActumArgs {
             custom_name: None,
             blocking: false,
+            no_alloc: None,
         };
 
         while !input.is_empty() {
@@ -53,16 +57,25 @@ impl syn::parse::Parse for ActumArgs {
                 args.custom_name = Some(name);
             } else if ident == "blocking" {
                 args.blocking = true;
+            } else if ident == "no_alloc" {
+                args.no_alloc = Some(ident);
             } else {
                 return Err(syn::Error::new_spanned(
                     ident,
-                    "unknown actum attribute; expected `blocking` or `name = \"...\"`",
+                    "unknown actum attribute; expected `blocking`, `no_alloc` or `name = \"...\"`",
                 ));
             }
 
             if !input.is_empty() {
                 input.parse::<syn::Token![,]>()?;
             }
+        }
+
+        if let (Some(no_alloc), false) = (&args.no_alloc, args.blocking) {
+            return Err(syn::Error::new_spanned(
+                no_alloc,
+                "`no_alloc` is for blocking actors: `#[actum(blocking, no_alloc)]`",
+            ));
         }
 
         Ok(args)
@@ -98,6 +111,14 @@ fn report(error: syn::Error, impl_block: &syn::ItemImpl) -> TokenStream {
 /// the actor answers. An `async fn` in such a block is an error, since there is
 /// no runtime to drive it. See the `blocking` module for what a caller chooses
 /// between parking and busy-waiting.
+///
+/// # `#[actum(blocking, no_alloc)]`
+///
+/// A blocking actor whose calls allocate nothing: the reply is a slot on the
+/// caller's stack and the job queue is a `static` the program declares, so
+/// the builder has no default channel and `build` exists only after
+/// `channel`. See the `blocking::no_alloc` module for the queue, and for why
+/// only a blocking call can have its reply on a stack.
 #[proc_macro_attribute]
 pub fn actum(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = syn::parse_macro_input!(item as syn::ItemImpl);
@@ -113,7 +134,8 @@ pub fn actum(attr: TokenStream, item: TokenStream) -> TokenStream {
         parse::Backend::Async
     };
 
-    match parse::ImplInfo::from_impl_block(&mut impl_block, args.custom_name, backend) {
+    let no_alloc = args.no_alloc.is_some();
+    match parse::ImplInfo::from_impl_block(&mut impl_block, args.custom_name, backend, no_alloc) {
         Ok(info) => codegen::generate(&info).into(),
         Err(error) => report(error, &impl_block),
     }

@@ -40,6 +40,10 @@ fn compile_fail_tests() {
     t.compile_fail("tests/compile_fail/method_generic.rs");
     t.compile_fail("tests/compile_fail/async_method_where_clause.rs");
     t.compile_fail("tests/compile_fail/async_method_in_blocking_block.rs");
+
+    // `no_alloc` is the blocking backend's, and has no default channel.
+    t.compile_fail("tests/compile_fail/no_alloc_without_blocking.rs");
+    t.compile_fail("tests/compile_fail/no_alloc_without_channel.rs");
     t.compile_fail("tests/compile_fail/by_value_self.rs");
 
     // A handle sends through &mut, so one handle is one call at a time

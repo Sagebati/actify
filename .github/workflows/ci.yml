@@ -23,7 +23,7 @@ env:
   TRYBUILD_TOOLCHAIN: "1.97.1"
   # The oldest toolchain the published crates support, matching the
   # rust-version in [workspace.package].
-  MSRV: "1.85"
+  MSRV: "1.87"
 
 jobs:
   fmt:
