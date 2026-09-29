@@ -1,0 +1,5 @@
+error: Actor methods cannot declare generic parameters of their own: a call travels as a variant of the actor's message enum, which has no such parameter to hold the arguments (use a concrete type, e.g. fn(usize) -> usize rather than F: Fn(usize) -> usize)
+  --> tests/compile_fail/method_generic.rs:10:14
+   |
+10 |     fn apply<F>(&self, value: usize, f: F) -> usize
+   |              ^

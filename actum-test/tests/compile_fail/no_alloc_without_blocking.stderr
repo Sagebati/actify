@@ -1,0 +1,5 @@
+error: `no_alloc` is for blocking actors: `#[actum(blocking, no_alloc)]`
+ --> tests/compile_fail/no_alloc_without_blocking.rs:8:9
+  |
+8 | #[actum(no_alloc)]
+  |         ^^^^^^^^

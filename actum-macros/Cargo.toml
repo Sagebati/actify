@@ -1,0 +1,25 @@
+[package]
+name = "actum-macros"
+version = "0.6.0"
+description = "Actum's procedural macros"
+readme = "README.md"
+keywords = ["actor", "async", "macro", "proc-macro", "tokio"]
+categories = ["asynchronous", "development-tools::procedural-macro-helpers"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[features]
+default = []
+# Emits `Handle::new` on every generated handle. actum turns this on with its
+# own `tokio` feature, which is what `Handle::new` needs to spawn with.
+tokio = []
+
+[lib]
+proc-macro = true

@@ -1,0 +1,15 @@
+error[E0599]: no method named `build` found for struct `CounterHandleBuilder` in the current scope
+  --> tests/compile_fail/no_alloc_without_channel.rs:17:64
+   |
+ 8 | #[actum(blocking, no_alloc)]
+   | ---------------------------- method `build` not found for this struct
+...
+17 |     let (_handle, _actor) = CounterHandle::builder(Counter(0)).build();
+   |                                                                ^^^^^ method not found in `CounterHandleBuilder`
+   |
+   = note: the method was found for
+           - `CounterHandleBuilder<(Tx, Rx)>`
+help: one of the expressions' fields has a method of the same name
+   |
+17 |     let (_handle, _actor) = CounterHandle::builder(Counter(0)).0.build();
+   |                                                                ++

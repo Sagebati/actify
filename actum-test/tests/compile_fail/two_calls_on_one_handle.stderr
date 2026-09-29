@@ -1,0 +1,10 @@
+error[E0499]: cannot borrow `handle` as mutable more than once at a time
+  --> tests/compile_fail/two_calls_on_one_handle.rs:22:18
+   |
+21 |     let first = handle.add(1);
+   |                 ------ first mutable borrow occurs here
+22 |     let second = handle.add(2);
+   |                  ^^^^^^ second mutable borrow occurs here
+23 |
+24 |     let _ = (first.await, second.await);
+   |              ----- first borrow later used here
